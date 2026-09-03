@@ -7,14 +7,21 @@ from src.services.extractor import generate_answer
 from src.services.router import analyze_query
 from src.services.tools import TOOLS_REGISTRY
 from src.api.auth import get_current_user, User
+from src.services.cache import check_semantic_cache, save_semantic_cache
 import asyncio
+import json
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 @router.post("/", response_model=StructuredAnswer)
 async def chat_endpoint(request: ChatRequest, current_user: User = Depends(get_current_user)):
     try:
-        # 1. Agentic Routing (ahora con memoria y tool calling)
+        # --- Fase 4: Caché Semántico ---
+        cached_data = await check_semantic_cache(current_user.tenant_id, request.query)
+        if cached_data:
+            return StructuredAnswer(**cached_data)
+
+        # 1. Agentic Routing
         intent = await analyze_query(request.query, request.history)
         
         if intent.intent_type in ["casual_greeting", "out_of_scope"]:
@@ -64,7 +71,7 @@ async def chat_endpoint(request: ChatRequest, current_user: User = Depends(get_c
                 seen.add(doc.content)
                 unique_candidates.append(doc)
                 
-        # 3. Re-ranking (usamos la query original para el reranker, es más precisa para medir relevancia real)
+        # 3. Re-ranking
         best_results = await rerank_documents(request.query, unique_candidates, top_k=request.top_k_rerank)
         
         # --- GraphRAG Extraction ---
@@ -82,6 +89,10 @@ async def chat_endpoint(request: ChatRequest, current_user: User = Depends(get_c
         
         # 4. Generación
         structured_response = await generate_answer(request.query, best_results)
+        
+        # Guardar en Caché Semántico
+        await save_semantic_cache(current_user.tenant_id, request.query, structured_response.model_dump())
+        
         return structured_response
         
     except Exception as e:
@@ -90,12 +101,19 @@ async def chat_endpoint(request: ChatRequest, current_user: User = Depends(get_c
 
 from fastapi.responses import StreamingResponse
 from src.services.extractor import generate_answer_stream
-import json
 
 @router.post("/stream/")
 async def chat_stream_endpoint(request: ChatRequest, current_user: User = Depends(get_current_user)):
     async def sse_generator():
         try:
+            # --- Fase 4: Caché Semántico ---
+            cached_data = await check_semantic_cache(current_user.tenant_id, request.query)
+            if cached_data:
+                # Agregar bandera extra para que el frontend lo sepa
+                cached_data["answer"] = "⚡ [CACHE HIT] " + cached_data.get("answer", "")
+                yield f"data: {json.dumps(cached_data)}\n\n"
+                return
+
             intent = await analyze_query(request.query, request.history)
             
             if intent.intent_type in ["casual_greeting", "out_of_scope"]:
@@ -109,7 +127,6 @@ async def chat_stream_endpoint(request: ChatRequest, current_user: User = Depend
                     yield f"data: {json.dumps({'answer': f'¡Herramienta ejecutada ({intent.tool_name})!\\n\\n{tool_result}', 'sources': [], 'confidence_score': 1.0})}\n\n"
                 return
 
-            # --- Fase 4: HyDE & Multi-Query Transformation ---
             queries_to_search = intent.search_queries if intent.search_queries else [request.query]
             if intent.hypothetical_document:
                 queries_to_search.append(intent.hypothetical_document)
@@ -130,7 +147,6 @@ async def chat_stream_endpoint(request: ChatRequest, current_user: User = Depend
                     
             best_results = await rerank_documents(request.query, unique_candidates, top_k=request.top_k_rerank)
             
-            # --- GraphRAG Extraction ---
             from src.services.graphrag import retrieve_subgraph
             from src.models.search import SearchResult
             
@@ -143,8 +159,15 @@ async def chat_stream_endpoint(request: ChatRequest, current_user: User = Depend
                     score=1.0
                 ))
             
+            last_partial = None
             async for partial_json in generate_answer_stream(request.query, best_results):
+                last_partial = partial_json
                 yield f"data: {partial_json}\n\n"
+                
+            # Guardar en Caché Semántico al finalizar el stream
+            if last_partial:
+                final_dict = json.loads(last_partial)
+                await save_semantic_cache(current_user.tenant_id, request.query, final_dict)
                 
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"

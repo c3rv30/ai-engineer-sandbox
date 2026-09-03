@@ -26,3 +26,18 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation_policy ON documents
     USING (tenant_id = NULLIF(current_setting('app.current_tenant', TRUE), '')::UUID);
 
+
+-- Fase 4: Semantic Cache
+CREATE TABLE IF NOT EXISTS semantic_cache (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    query_text TEXT NOT NULL,
+    query_embedding vector(384),
+    response_json JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX ON semantic_cache USING hnsw (query_embedding vector_cosine_ops);
+CREATE INDEX ON semantic_cache(tenant_id);
+ALTER TABLE semantic_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY cache_tenant_isolation_policy ON semantic_cache 
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', TRUE), '')::UUID);
