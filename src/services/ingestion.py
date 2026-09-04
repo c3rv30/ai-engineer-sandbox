@@ -33,19 +33,78 @@ class IngestionResult(BaseModel):
     total_chunks: int
     inserted_chunks: int
 
-@observe(name="chunk_text")
-def chunk_text(content: str, source_type: str, max_tokens: int = 256, overlap: int = 30) -> List[DocumentChunk]:
+import re
+import numpy as np
+
+def cosine_distance(a, b):
+    # Previene division por 0 en vectores vacíos
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 1.0
+    return 1 - (np.dot(a, b) / (norm_a * norm_b))
+
+@observe(name="semantic_chunk_text")
+def chunk_text(content: str, source_type: str, max_tokens: int = 400, overlap: int = 0) -> List[DocumentChunk]:
+    """
+    Fase 4: Semantic Chunking Inteligente.
+    Divide el texto respetando los límites de las oraciones y agrupándolas matemáticamente 
+    según la similitud de sus embeddings (all-MiniLM-L6-v2) con un límite de tamaño (max_tokens).
+    """
     encoder = tiktoken.get_encoding("cl100k_base")
-    tokens = encoder.encode(content)
+    
+    # 1. Separar por oraciones respetando acrónimos y puntos (Regex simple)
+    sentences = re.split(r'(?<=[.?!])\s+', content)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    if not sentences:
+        return []
+    
+    # Si es muy corto, no vale la pena hacer la matemática de embeddings
+    if len(sentences) == 1:
+        return [DocumentChunk(
+            text=sentences[0],
+            metadata={"source_type": source_type, "chunk_size_tokens": len(encoder.encode(sentences[0]))}
+        )]
+        
+    # 2. Vectorizar oraciones para comparar similitud
+    # Al estar corriendo en la ingestión, esto es instantáneo localmente
+    sentence_embeddings = model.encode(sentences)
+    
+    distances = [cosine_distance(sentence_embeddings[i], sentence_embeddings[i+1]) for i in range(len(sentences)-1)]
+    
+    # Umbral Dinámico: Cortar cuando la oración actual diverja significativamente de la norma del documento
+    # O si superamos el límite matemático de tokens
+    threshold = np.mean(distances) + 1.25 * np.std(distances)
     
     chunks = []
-    for i in range(0, len(tokens), max_tokens - overlap):
-        chunk_tokens = tokens[i:i + max_tokens]
-        chunk_text_decoded = encoder.decode(chunk_tokens)
+    current_chunk_sentences = [sentences[0]]
+    current_chunk_tokens = len(encoder.encode(sentences[0]))
+    
+    for i in range(1, len(sentences)):
+        sentence = sentences[i]
+        tokens_count = len(encoder.encode(sentence))
+        
+        dist = distances[i-1]
+        
+        # Romper si cambió el tema drásticamente O si nos pasamos del límite
+        if dist > threshold or (current_chunk_tokens + tokens_count) > max_tokens:
+            chunks.append(DocumentChunk(
+                text=" ".join(current_chunk_sentences),
+                metadata={"source_type": source_type, "chunk_size_tokens": current_chunk_tokens}
+            ))
+            current_chunk_sentences = [sentence]
+            current_chunk_tokens = tokens_count
+        else:
+            current_chunk_sentences.append(sentence)
+            current_chunk_tokens += tokens_count
+            
+    if current_chunk_sentences:
         chunks.append(DocumentChunk(
-            text=chunk_text_decoded, 
-            metadata={"source_type": source_type, "chunk_size_tokens": len(chunk_tokens)}
+            text=" ".join(current_chunk_sentences),
+            metadata={"source_type": source_type, "chunk_size_tokens": current_chunk_tokens}
         ))
+        
     return chunks
 
 @observe(name="describe_image_with_claude")
