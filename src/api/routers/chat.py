@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from src.models.requests import ChatRequest
 from src.models.structured import StructuredAnswer
 from src.services.retriever import retrieve_documents
@@ -8,13 +8,14 @@ from src.services.router import analyze_query
 from src.services.tools import TOOLS_REGISTRY
 from src.api.auth import get_current_user, User
 from src.services.cache import check_semantic_cache, save_semantic_cache
+from src.services.memory import retrieve_user_facts, extract_and_save_facts
 import asyncio
 import json
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 @router.post("/", response_model=StructuredAnswer)
-async def chat_endpoint(request: ChatRequest, current_user: User = Depends(get_current_user)):
+async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     try:
         # --- Fase 4: Caché Semántico ---
         cached_data = await check_semantic_cache(current_user.tenant_id, request.query)
@@ -86,12 +87,18 @@ async def chat_endpoint(request: ChatRequest, current_user: User = Depends(get_c
                 metadata={"source": "GraphRAG Local Database"},
                 score=1.0
             ))
+            
+        # --- Fase 4: Long-Term Memory ---
+        user_profile = await retrieve_user_facts(current_user.tenant_id, request.query)
         
         # 4. Generación
-        structured_response = await generate_answer(request.query, best_results)
+        structured_response = await generate_answer(request.query, best_results, user_profile)
         
         # Guardar en Caché Semántico
         await save_semantic_cache(current_user.tenant_id, request.query, structured_response.model_dump())
+        
+        # Extraer Facts en Background
+        background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
         
         return structured_response
         
@@ -103,13 +110,12 @@ from fastapi.responses import StreamingResponse
 from src.services.extractor import generate_answer_stream
 
 @router.post("/stream/")
-async def chat_stream_endpoint(request: ChatRequest, current_user: User = Depends(get_current_user)):
+async def chat_stream_endpoint(request: ChatRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     async def sse_generator():
         try:
             # --- Fase 4: Caché Semántico ---
             cached_data = await check_semantic_cache(current_user.tenant_id, request.query)
             if cached_data:
-                # Agregar bandera extra para que el frontend lo sepa
                 cached_data["answer"] = "⚡ [CACHE HIT] " + cached_data.get("answer", "")
                 yield f"data: {json.dumps(cached_data)}\n\n"
                 return
@@ -159,15 +165,20 @@ async def chat_stream_endpoint(request: ChatRequest, current_user: User = Depend
                     score=1.0
                 ))
             
+            # --- Fase 4: Long-Term Memory ---
+            user_profile = await retrieve_user_facts(current_user.tenant_id, request.query)
+            
             last_partial = None
-            async for partial_json in generate_answer_stream(request.query, best_results):
+            async for partial_json in generate_answer_stream(request.query, best_results, user_profile):
                 last_partial = partial_json
                 yield f"data: {partial_json}\n\n"
                 
-            # Guardar en Caché Semántico al finalizar el stream
             if last_partial:
                 final_dict = json.loads(last_partial)
                 await save_semantic_cache(current_user.tenant_id, request.query, final_dict)
+                
+            # Extraer Facts en Background
+            background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
                 
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"

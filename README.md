@@ -55,7 +55,7 @@ Opciones arquitectónicas avanzadas para convertir el Sandbox en un sistema aut�
 - [ ] **2. Agentes Multi-Rol (LangGraph):** Orquestación de un equipo de agentes (Supervisor, Investigador, Revisor) con flujos de estado cíclicos, reemplazando el router lineal.
 - [ ] **3. Chunking Inteligente:** Semantic Chunking o Hierarchical Chunking (Parent-Child) para maximizar coherencia semántica al fragmentar documentos.
 - [x] **4. Transformación de Consultas:** Implementación de HyDE (Hypothetical Document Embeddings) y Multi-Query para hacer la recuperación invulnerable a preguntas ambiguas.
-- [ ] **5. Memoria Dinámica a Largo Plazo:** Agente en background que extrae preferencias y hechos del usuario, persistiendo un Perfil Semántico continuo a través de sesiones.
+- [x] **5. Memoria Dinámica a Largo Plazo:** Agente en background que extrae preferencias y hechos del usuario, persistiendo un Perfil Semántico continuo a través de sesiones.
 - [x] **6. Caché Semántico:** Interceptación de preguntas repetidas buscando similitud coseno en la BD para devolver respuestas instantáneas con 0% de costo de inferencia.
 
 

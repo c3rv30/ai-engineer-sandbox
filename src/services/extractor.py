@@ -12,7 +12,7 @@ anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 client = instructor.from_anthropic(anthropic_client)
 
 @observe(name="generate_structured_answer")
-async def generate_answer(query: str, context: List[RerankedResult]) -> StructuredAnswer:
+async def generate_answer(query: str, context: List[RerankedResult], user_profile: str = "") -> StructuredAnswer:
     """
     Toma la pregunta y el contexto recuperado, e invoca a Anthropic (Claude)
     para generar una respuesta estructurada validada con Pydantic.
@@ -27,6 +27,8 @@ async def generate_answer(query: str, context: List[RerankedResult]) -> Structur
     Eres un asistente experto de AI Engineering. Tu objetivo es responder a la pregunta del usuario utilizando ÚNICAMENTE la información provista en el Contexto.
     Si la información no es suficiente, debes indicarlo en 'requires_more_info'.
     Cita las fuentes usando el ID del documento.
+    
+    {user_profile}
     
     Pregunta: {query}
     
@@ -51,7 +53,7 @@ from instructor import Partial
 from typing import AsyncGenerator
 
 @observe(name="generate_structured_answer_stream")
-async def generate_answer_stream(query: str, context: List[RerankedResult]) -> AsyncGenerator[str, None]:
+async def generate_answer_stream(query: str, context: List[RerankedResult], user_profile: str = "") -> AsyncGenerator[str, None]:
     """
     Streaming response usando Partial.
     """
@@ -63,6 +65,8 @@ async def generate_answer_stream(query: str, context: List[RerankedResult]) -> A
     Eres un asistente experto de AI Engineering. Tu objetivo es responder a la pregunta del usuario utilizando ÚNICAMENTE la información provista en el Contexto.
     
     MUY IMPORTANTE: Debes devolver tu respuesta estructurada. Si vas a escribir un análisis largo, pon todo el texto formateado en Markdown dentro del campo 'answer'. No respondas con texto plano fuera del esquema JSON.
+    
+    {user_profile}
     
     Pregunta: {query}
     Contexto: {context_text}
