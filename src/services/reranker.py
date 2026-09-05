@@ -7,7 +7,7 @@ from src.models.search import SearchResult, RerankedResult
 # FlashRank inicializa el modelo local (ej. ms-marco-TinyBERT o similar)
 # El modelo por defecto es muy rápido en CPU
 print("Cargando modelo local de Re-ranker (FlashRank)...")
-ranker = Ranker(model_name="ms-marco-TinyBERT-L-2-v2", cache_dir="/tmp/flashrank")
+ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="/tmp/flashrank")
 
 @observe(name="cross_encoder_rerank")
 async def rerank_documents(query: str, candidates: List[SearchResult], top_k: int = 3) -> List[RerankedResult]:

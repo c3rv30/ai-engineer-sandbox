@@ -52,7 +52,7 @@ Para llevar el Sandbox al siguiente nivel, hemos planificado 4 etapas cronológi
 
 Opciones arquitectónicas avanzadas para convertir el Sandbox en un sistema autónomo y optimizado:
 - [ ] **1. RAG Evaluator & Observabilidad Activa:** Integración de frameworks como RAGAS/TruLens para calcular métricas (Context Precision, Recall, Faithfulness) en segundo plano.
-- [ ] **2. Agentes Multi-Rol (LangGraph):** Orquestación de un equipo de agentes (Supervisor, Investigador, Revisor) con flujos de estado cíclicos, reemplazando el router lineal.
+- [x] **2. Agentes Multi-Rol (LangGraph):** Orquestación de un equipo de agentes (Supervisor, Investigador, Revisor) con flujos de estado cíclicos, reemplazando el router lineal.
 - [x] **3. Chunking Inteligente:** Semantic Chunking o Hierarchical Chunking (Parent-Child) para maximizar coherencia semántica al fragmentar documentos.
 - [x] **4. Transformación de Consultas:** Implementación de HyDE (Hypothetical Document Embeddings) y Multi-Query para hacer la recuperación invulnerable a preguntas ambiguas.
 - [x] **5. Memoria Dinámica a Largo Plazo:** Agente en background que extrae preferencias y hechos del usuario, persistiendo un Perfil Semántico continuo a través de sesiones.

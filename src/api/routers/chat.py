@@ -1,103 +1,57 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
-from src.models.requests import ChatRequest
-from src.models.structured import StructuredAnswer
-from src.services.retriever import retrieve_documents
-from src.services.reranker import rerank_documents
-from src.services.extractor import generate_answer
-from src.services.router import analyze_query
-from src.services.tools import TOOLS_REGISTRY
-from src.api.auth import get_current_user, User
-from src.services.cache import check_semantic_cache, save_semantic_cache
-from src.services.memory import retrieve_user_facts, extract_and_save_facts
+from fastapi.responses import StreamingResponse
 import asyncio
 import json
 
+from src.models.requests import ChatRequest
+from src.models.structured import StructuredAnswer
+from src.api.auth import get_current_user, User
+from src.services.cache import check_semantic_cache, save_semantic_cache
+from src.services.memory import retrieve_user_facts, extract_and_save_facts
+
+# --- LangGraph ---
+from src.services.agent_graph.graph import build_graph
+from src.services.agent_graph.state import AgentState
+
 router = APIRouter(prefix="/chat", tags=["Chat"])
+
+# Instanciamos el grafo una vez (es thread-safe)
+agent_graph = build_graph()
 
 @router.post("/", response_model=StructuredAnswer)
 async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     try:
-        # --- Fase 4: Caché Semántico ---
+        # 1. Caché Semántico
         cached_data = await check_semantic_cache(current_user.tenant_id, request.query)
         if cached_data:
             return StructuredAnswer(**cached_data)
-
-        # 1. Agentic Routing
-        intent = await analyze_query(request.query, request.history)
-        
-        if intent.intent_type in ["casual_greeting", "out_of_scope"]:
-            return StructuredAnswer(
-                answer=intent.direct_answer,
-                sources=[],
-                confidence_score=1.0,
-                requires_more_info=False
-            )
             
-        if intent.intent_type == "tool_execution":
-            tool_func = TOOLS_REGISTRY.get(intent.tool_name)
-            if tool_func:
-                tool_result = tool_func(**intent.tool_args)
-                return StructuredAnswer(
-                    answer=f"¡Herramienta ejecutada ({intent.tool_name})! Resultado:\n\n{tool_result}",
-                    sources=[],
-                    confidence_score=1.0,
-                    requires_more_info=False
-                )
-            else:
-                return StructuredAnswer(
-                    answer=f"Error: Herramienta '{intent.tool_name}' no encontrada en el registro.",
-                    sources=[],
-                    confidence_score=0.0,
-                    requires_more_info=True
-                )
-                
-        # --- Fase 4: HyDE & Multi-Query Transformation ---
-        queries_to_search = intent.search_queries if intent.search_queries else [request.query]
-        if intent.hypothetical_document:
-            queries_to_search.append(intent.hypothetical_document)
-            
-        # 2. Recuperación Concurrente
-        retrieval_tasks = [
-            retrieve_documents(q, current_user.tenant_id, top_k=max(request.top_k_retrieve, 15))
-            for q in queries_to_search
-        ]
-        results_lists = await asyncio.gather(*retrieval_tasks)
-        vector_candidates = [doc for sublist in results_lists for doc in sublist]
-        
-        # Deduplicar por contenido exacto
-        seen = set()
-        unique_candidates = []
-        for doc in vector_candidates:
-            if doc.content not in seen:
-                seen.add(doc.content)
-                unique_candidates.append(doc)
-                
-        # 3. Re-ranking
-        best_results = await rerank_documents(request.query, unique_candidates, top_k=request.top_k_rerank)
-        
-        # --- GraphRAG Extraction ---
-        from src.services.graphrag import retrieve_subgraph
-        from src.models.search import SearchResult
-        
-        graph_context = await retrieve_subgraph(current_user.tenant_id, request.query)
-        if graph_context:
-            best_results.insert(0, SearchResult(
-                id="graphrag-subgraph",
-                content=graph_context,
-                metadata={"source": "GraphRAG Local Database"},
-                score=1.0
-            ))
-            
-        # --- Fase 4: Long-Term Memory ---
+        # 2. Long-Term Memory
         user_profile = await retrieve_user_facts(current_user.tenant_id, request.query)
+
+        # 3. Inicializar Estado del Grafo
+        initial_state = AgentState(
+            messages=[],
+            tenant_id=current_user.tenant_id,
+            user_profile=user_profile,
+            query=request.query,
+            intent_type="",
+            search_queries=[],
+            documents=[],
+            final_answer=None,
+            iterations=0,
+            needs_more_info=False
+        )
         
-        # 4. Generación
-        structured_response = await generate_answer(request.query, best_results, user_profile)
+        # 4. Ejecutar el Grafo
+        final_state = await agent_graph.ainvoke(initial_state)
         
-        # Guardar en Caché Semántico
+        structured_response = final_state.get("final_answer")
+        if not structured_response:
+            raise HTTPException(status_code=500, detail="El Grafo de Agentes no devolvió una respuesta final.")
+            
+        # 5. Tareas post-respuesta
         await save_semantic_cache(current_user.tenant_id, request.query, structured_response.model_dump())
-        
-        # Extraer Facts en Background
         background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
         
         return structured_response
@@ -106,78 +60,58 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
         raise HTTPException(status_code=500, detail=str(e))
 
 
-from fastapi.responses import StreamingResponse
-from src.services.extractor import generate_answer_stream
-
 @router.post("/stream/")
 async def chat_stream_endpoint(request: ChatRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
+    """
+    Endpoint de Streaming usando LangGraph. 
+    Emitimos eventos de progreso y finalmente la respuesta estructurada.
+    """
     async def sse_generator():
         try:
-            # --- Fase 4: Caché Semántico ---
             cached_data = await check_semantic_cache(current_user.tenant_id, request.query)
             if cached_data:
                 cached_data["answer"] = "⚡ [CACHE HIT] " + cached_data.get("answer", "")
                 yield f"data: {json.dumps(cached_data)}\n\n"
                 return
 
-            intent = await analyze_query(request.query, request.history)
-            
-            if intent.intent_type in ["casual_greeting", "out_of_scope"]:
-                yield f"data: {json.dumps({'answer': intent.direct_answer, 'sources': [], 'confidence_score': 1.0})}\n\n"
-                return
-                
-            if intent.intent_type == "tool_execution":
-                tool_func = TOOLS_REGISTRY.get(intent.tool_name)
-                if tool_func:
-                    tool_result = tool_func(**intent.tool_args)
-                    yield f"data: {json.dumps({'answer': f'¡Herramienta ejecutada ({intent.tool_name})!\\n\\n{tool_result}', 'sources': [], 'confidence_score': 1.0})}\n\n"
-                return
-
-            queries_to_search = intent.search_queries if intent.search_queries else [request.query]
-            if intent.hypothetical_document:
-                queries_to_search.append(intent.hypothetical_document)
-                
-            retrieval_tasks = [
-                retrieve_documents(q, current_user.tenant_id, top_k=max(request.top_k_retrieve, 15))
-                for q in queries_to_search
-            ]
-            results_lists = await asyncio.gather(*retrieval_tasks)
-            vector_candidates = [doc for sublist in results_lists for doc in sublist]
-            
-            seen = set()
-            unique_candidates = []
-            for doc in vector_candidates:
-                if doc.content not in seen:
-                    seen.add(doc.content)
-                    unique_candidates.append(doc)
-                    
-            best_results = await rerank_documents(request.query, unique_candidates, top_k=request.top_k_rerank)
-            
-            from src.services.graphrag import retrieve_subgraph
-            from src.models.search import SearchResult
-            
-            graph_context = await retrieve_subgraph(current_user.tenant_id, request.query)
-            if graph_context:
-                best_results.insert(0, SearchResult(
-                    id="graphrag-subgraph",
-                    content=graph_context,
-                    metadata={"source": "GraphRAG Local Database"},
-                    score=1.0
-                ))
-            
-            # --- Fase 4: Long-Term Memory ---
             user_profile = await retrieve_user_facts(current_user.tenant_id, request.query)
+
+            initial_state = AgentState(
+                messages=[],
+                tenant_id=current_user.tenant_id,
+                user_profile=user_profile,
+                query=request.query,
+                intent_type="",
+                search_queries=[],
+                documents=[],
+                final_answer=None,
+                iterations=0,
+                needs_more_info=False
+            )
             
-            last_partial = None
-            async for partial_json in generate_answer_stream(request.query, best_results, user_profile):
-                last_partial = partial_json
-                yield f"data: {partial_json}\n\n"
-                
-            if last_partial:
-                final_dict = json.loads(last_partial)
+            # Usamos astream() de LangGraph para capturar el progreso de los nodos
+            final_dict = None
+            accumulated_answer = ""
+            async for output in agent_graph.astream(initial_state):
+                for node_name, state_update in output.items():
+                    if node_name == "supervisor":
+                        accumulated_answer += "🤖 *Supervisor evaluando estrategia...*\n\n"
+                        yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
+                    elif node_name == "researcher":
+                        accumulated_answer += "🔍 *Investigador buscando en Postgres Vector y GraphRAG...*\n\n"
+                        yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
+                    elif node_name == "generator":
+                        accumulated_answer += "✍️ *Redactor estructurando respuesta final...*\n\n---\n\n"
+                        yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
+                        
+                        if "final_answer" in state_update and state_update["final_answer"]:
+                            final_dict = state_update["final_answer"].model_dump()
+                            # Anexamos la respuesta final real
+                            final_dict["answer"] = accumulated_answer + (final_dict.get("answer") or "")
+                            yield f"data: {json.dumps(final_dict)}\n\n"
+                            
+            if final_dict:
                 await save_semantic_cache(current_user.tenant_id, request.query, final_dict)
-                
-            # Extraer Facts en Background
             background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
                 
         except Exception as e:
