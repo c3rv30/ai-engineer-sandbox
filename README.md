@@ -121,3 +121,8 @@ Este Sandbox fue construido siguiendo una progresión meticulosa de 4 Fases para
 
 > **Diseñado y desarrollado por Bryan.**
 > *Demostrando experiencia comprobable en Arquitecturas Cloud y AI Engineering.*
+
+---
+
+## 🚀 Próximos Pasos (Fase 5)
+Para consultar los planes futuros de escalabilidad (Dockerización, Dashboards, Limpieza de Caché, GraphRAG Avanzado), consulta el documento: [Roadmap Fase 5](docs/ROADMAP_FASE_5_ESCALABILIDAD.md).
