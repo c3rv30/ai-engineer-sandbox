@@ -76,3 +76,39 @@ flowchart TD
    A Claude se le pide estandarizar la memoria en tercera persona (ej. *"El usuario odia Java"*).
 3. **Inyección Dinámica de Perfil (`retrieve_user_facts`):**
    No inyectamos **toda** la memoria en cada turno, ya que contaminaría el context-window a lo largo de los años. Hacemos una búsqueda vectorial entre la **pregunta actual y la tabla de memoria** para traer solo los 3 Hechos que sean relevantes a la conversación en curso, encapsulándolos en un tag `<USER_PROFILE>`.
+
+## Observabilidad Activa (RAG Evaluator)
+
+Se implementó un patrón **LLM-as-a-judge** inspirado en **RAGAS/TruLens**. Para no bloquear al usuario ni impactar la latencia de la aplicación, el evaluador se dispara como un `BackgroundTask` en FastAPI una vez que la respuesta fue enviada al cliente mediante SSE.
+
+Se encarga de inyectar en un modelo estructurado (vía `instructor`) la Pregunta original, el Contexto recuperado por los Agentes, y la Respuesta generada. 
+El LLM asigna puntajes flotantes (0.0 a 1.0) para tres métricas fundamentales:
+1. **Faithfulness (Fidelidad):** Mide alucinaciones. Penaliza si la respuesta menciona información ausente en el contexto.
+2. **Answer Relevance:** Mide si la respuesta ataca directamente el intent del usuario.
+3. **Context Precision:** Mide la calidad del `retriever`, evaluando si el contexto inyectado realmente contenía la información útil sin "basura".
+
+Estos datos (junto con una breve cadena de razonamiento) se almacenan en la tabla PostgreSQL `rag_evaluations` aislada bajo políticas RLS por cada Tenant.
+
+### Flujo de Ejecución (LangGraph + Evaluador)
+```mermaid
+sequenceDiagram
+    participant User
+    participant Streamlit
+    participant FastAPI
+    participant LangGraph
+    participant DB(PgVector)
+    participant Evaluator(Background)
+    
+    User->>Streamlit: Envía pregunta compleja
+    Streamlit->>FastAPI: POST /chat/stream/
+    FastAPI->>LangGraph: Inicia StateGraph
+    LangGraph-->>FastAPI: yield 🤖 Supervisor
+    FastAPI-->>Streamlit: SSE State Update
+    LangGraph->>DB(PgVector): Extrae Documentos (Researcher)
+    LangGraph-->>FastAPI: yield 🔍 Investigador
+    FastAPI-->>Streamlit: SSE State Update
+    LangGraph-->>FastAPI: yield ✍️ Respuesta Final (Generator)
+    FastAPI-->>Streamlit: SSE Final JSON
+    FastAPI-)Evaluator: Fire-and-forget: evaluate_rag_response()
+    Evaluator->>DB(PgVector): INSERT INTO rag_evaluations (scores, reasoning)
+```

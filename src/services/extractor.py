@@ -40,7 +40,7 @@ async def generate_answer(query: str, context: List[RerankedResult], user_profil
     # Claude 3.5 Haiku o Sonnet son ideales para esto.
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
+        max_tokens=8192,
         messages=[
             {"role": "user", "content": prompt}
         ],
@@ -75,7 +75,7 @@ async def generate_answer_stream(query: str, context: List[RerankedResult], user
     try:
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=2048, # Aumentamos tokens para análisis largos
+            max_tokens=8192, # Máximo permitido para análisis largos
             messages=[{"role": "user", "content": prompt}],
             response_model=Partial[StructuredAnswer],
             stream=True
