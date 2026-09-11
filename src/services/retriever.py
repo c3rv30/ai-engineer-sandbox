@@ -1,4 +1,5 @@
 import os
+import uuid
 import asyncio
 import json
 from typing import List
@@ -17,7 +18,7 @@ print(f"Cargando modelo local de embedding {EMBEDDING_MODEL} para Retriever...")
 model = SentenceTransformer(EMBEDDING_MODEL)
 
 @observe(name="hybrid_search")
-async def retrieve_documents(query: str, tenant_id: str, top_k: int = 5) -> List[SearchResult]:
+async def retrieve_documents(query: str, tenant_id: uuid.UUID, top_k: int = 5) -> List[SearchResult]:
     """
     Realiza una búsqueda híbrida usando Reciprocal Rank Fusion (RRF).
     Combina Vector Search (HNSW) con Full-Text Search (BM25).

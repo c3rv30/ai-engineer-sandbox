@@ -37,6 +37,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
             tenant_id=current_user.tenant_id,
             user_profile=user_profile,
             query=request.query,
+            history=request.history,
             intent_type="",
             search_queries=[],
             documents=[],
@@ -87,6 +88,7 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                 tenant_id=current_user.tenant_id,
                 user_profile=user_profile,
                 query=request.query,
+                history=request.history,
                 intent_type="",
                 search_queries=[],
                 documents=[],
@@ -114,10 +116,17 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                         yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
                         
                         if "final_answer" in state_update and state_update["final_answer"]:
+                            # Objeto limpio: es el que se persiste en caché y el que
+                            # se envía al juez del evaluador. No debe llevar los
+                            # mensajes de progreso, que son artefactos de la UI.
                             final_dict = state_update["final_answer"].model_dump()
-                            # Anexamos la respuesta final real
-                            final_dict["answer"] = accumulated_answer + (final_dict.get("answer") or "")
-                            yield f"data: {json.dumps(final_dict)}\n\n"
+                            # Objeto para el stream: prolonga el texto ya emitido,
+                            # porque el frontend renderiza diffs de caracteres.
+                            stream_dict = {
+                                **final_dict,
+                                "answer": accumulated_answer + (final_dict.get("answer") or ""),
+                            }
+                            yield f"data: {json.dumps(stream_dict)}\n\n"
                             
             if final_dict:
                 await save_semantic_cache(current_user.tenant_id, request.query, final_dict)

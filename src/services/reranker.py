@@ -1,13 +1,41 @@
 import asyncio
+import os
+import shutil
+from pathlib import Path
 from typing import List
 from flashrank import Ranker, RerankRequest
+from flashrank.Config import model_file_map
 from langfuse import observe
 from src.models.search import SearchResult, RerankedResult
 
-# FlashRank inicializa el modelo local (ej. ms-marco-TinyBERT o similar)
-# El modelo por defecto es muy rápido en CPU
+# El modelo por defecto de FlashRank (ms-marco-TinyBERT-L-2-v2) devolvía 404,
+# por lo que se fija explícitamente el Cross-Encoder MiniLM-L-12-v2.
+RERANKER_MODEL = "ms-marco-MiniLM-L-12-v2"
+
+# FlashRank cachea en /tmp por defecto, que es almacenamiento volátil. Como decide
+# si descargar comprobando solo si existe el DIRECTORIO del modelo (Ranker.py:80),
+# un directorio que sobreviva vacío hace que no vuelva a descargar nunca y que la
+# app deje de arrancar de forma permanente. Por eso el caché va a una ruta estable.
+RERANKER_CACHE_DIR = os.getenv(
+    "RERANKER_CACHE_DIR", str(Path.home() / ".cache" / "flashrank")
+)
+
+def _ensure_model_cache() -> None:
+    """Sanea un directorio de modelo presente pero sin el archivo dentro.
+
+    Cubre el caso que FlashRank no contempla: descarga interrumpida, disco lleno o
+    limpieza parcial del caché. Sin esto, FlashRank daría el modelo por descargado
+    y onnxruntime fallaría con NO_SUCHFILE en tiempo de importación.
+    """
+    model_dir = Path(RERANKER_CACHE_DIR) / RERANKER_MODEL
+    model_file = model_dir / model_file_map[RERANKER_MODEL]
+    if model_dir.exists() and not model_file.exists():
+        print(f"Caché del re-ranker incompleto en {model_dir}; se fuerza la re-descarga.")
+        shutil.rmtree(model_dir, ignore_errors=True)
+
 print("Cargando modelo local de Re-ranker (FlashRank)...")
-ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="/tmp/flashrank")
+_ensure_model_cache()
+ranker = Ranker(model_name=RERANKER_MODEL, cache_dir=RERANKER_CACHE_DIR)
 
 @observe(name="cross_encoder_rerank")
 async def rerank_documents(query: str, candidates: List[SearchResult], top_k: int = 3) -> List[RerankedResult]:

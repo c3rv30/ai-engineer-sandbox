@@ -1,4 +1,5 @@
 import os
+import uuid
 import json
 from typing import List, Dict
 from pydantic import BaseModel
@@ -43,7 +44,7 @@ async def extract_knowledge_graph(chunk_text: str) -> List[Triplet]:
         print(f"Error extrayendo grafo: {e}")
         return []
 
-async def insert_knowledge_graph(tenant_id: str, chunk_id: str, triplets: List[Triplet]):
+async def insert_knowledge_graph(tenant_id: uuid.UUID, chunk_id: str, triplets: List[Triplet]):
     """Guarda las tripletas extraídas en la BDD bajo el tenant actual."""
     if not triplets:
         return
@@ -60,7 +61,7 @@ async def insert_knowledge_graph(tenant_id: str, chunk_id: str, triplets: List[T
     finally:
         await conn.close()
 
-async def retrieve_subgraph(tenant_id: str, query: str) -> str:
+async def retrieve_subgraph(tenant_id: uuid.UUID, query: str) -> str:
     """Busca en el grafo de conocimiento nodos relevantes a la query de forma difusa."""
     conn = await asyncpg.connect(DB_DSN)
     try:

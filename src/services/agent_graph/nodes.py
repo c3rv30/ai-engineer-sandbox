@@ -15,7 +15,7 @@ async def supervisor_node(state: AgentState) -> dict:
     Analiza la intención de la pregunta y decide qué camino tomar.
     """
     print("🤖 [Supervisor] Analizando consulta...")
-    intent = await analyze_query(state["query"], [])
+    intent = await analyze_query(state["query"], state.get("history", []))
     
     # Preparamos las variaciones de búsqueda para el investigador
     queries = intent.search_queries if intent.search_queries else [state["query"]]

@@ -1,4 +1,5 @@
 import os
+import uuid
 import asyncio
 import asyncpg
 import instructor
@@ -29,7 +30,7 @@ class RAGEvaluation(BaseModel):
         description="Breve explicación de las puntuaciones otorgadas."
     )
 
-async def evaluate_rag_response(tenant_id: str, query: str, answer: str, context: List[SearchResult]):
+async def evaluate_rag_response(tenant_id: uuid.UUID, query: str, answer: str, context: List[SearchResult]):
     """
     Se ejecuta en background. Evalúa la calidad del ciclo RAG y lo guarda en la BD.
     """

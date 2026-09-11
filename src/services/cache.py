@@ -1,4 +1,5 @@
 import os
+import uuid
 import json
 import asyncio
 import asyncpg
@@ -13,7 +14,7 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 # Reutilizar el mismo modelo en memoria (debería idealmente instanciarse 1 sola vez por app)
 model = SentenceTransformer(EMBEDDING_MODEL)
 
-async def check_semantic_cache(tenant_id: str, query: str, threshold: float = 0.85) -> Optional[dict]:
+async def check_semantic_cache(tenant_id: uuid.UUID, query: str, threshold: float = 0.85) -> Optional[dict]:
     """
     Busca si existe una pregunta muy similar (cosine similarity > threshold) en caché.
     Retorna el diccionario JSON con la respuesta si es un Cache Hit, sino None.
@@ -42,7 +43,7 @@ async def check_semantic_cache(tenant_id: str, query: str, threshold: float = 0.
     finally:
         await conn.close()
 
-async def save_semantic_cache(tenant_id: str, query: str, response_dict: dict):
+async def save_semantic_cache(tenant_id: uuid.UUID, query: str, response_dict: dict):
     """
     Guarda la pregunta y su respuesta en la tabla de caché semántico.
     """

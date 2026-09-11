@@ -41,9 +41,17 @@ async def analyze_query(query: str, history: list = None) -> QueryIntent:
     if history:
         # Formatear el historial reciente (últimos 4 mensajes para no inflar el token count)
         recent_history = history[-4:]
-        history_str = "Historial reciente de la conversación:\n"
+        lineas = []
         for msg in recent_history:
-            history_str += f"- {msg['role'].upper()}: {msg['content']}\n"
+            # El historial lo envía el cliente: un turno sin 'role'/'content' no debe
+            # tumbar la petición entera con un KeyError, simplemente se ignora.
+            if not isinstance(msg, dict):
+                continue
+            role, content = msg.get("role"), msg.get("content")
+            if role and content:
+                lineas.append(f"- {role.upper()}: {content}")
+        if lineas:
+            history_str = "Historial reciente de la conversación:\n" + "\n".join(lineas) + "\n"
             
     prompt = f"""
     Eres el "Router" de un AI Engineer Sandbox que actualmente está analizando el currículum y perfil profesional del ingeniero Bryan Bobadilla.

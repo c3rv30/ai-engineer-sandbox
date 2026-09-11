@@ -1,4 +1,5 @@
 import os
+import uuid
 import asyncio
 import asyncpg
 import instructor
@@ -20,7 +21,7 @@ class ExtractedFacts(BaseModel):
         default_factory=list
     )
 
-async def extract_and_save_facts(tenant_id: str, user_message: str):
+async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
     """
     Se ejecuta en background. Analiza si el usuario reveló nueva información sobre sí mismo.
     Si es así, la vectoriza y la guarda.
@@ -63,7 +64,7 @@ async def extract_and_save_facts(tenant_id: str, user_message: str):
     except Exception as e:
         print(f"Error extrayendo memoria: {e}")
 
-async def retrieve_user_facts(tenant_id: str, query: str, top_k: int = 3) -> str:
+async def retrieve_user_facts(tenant_id: uuid.UUID, query: str, top_k: int = 3) -> str:
     """
     Busca los hechos más relevantes del usuario basados en su pregunta actual.
     """

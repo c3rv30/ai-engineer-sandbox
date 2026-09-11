@@ -1,11 +1,30 @@
+import os
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
+from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 import jwt
 
-SECRET_KEY = "super_secret_ai_sandbox_key"
+load_dotenv()
+
+# HS256 es simétrico: quien conozca esta clave puede emitir tokens válidos para
+# cualquier tenant, y el aislamiento RLS de Postgres deja de tener efecto.
+# Por eso no admite valor por defecto: si falta, el proceso no arranca.
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "JWT_SECRET_KEY no está configurada. Añádela a tu archivo .env "
+        "(genera una con: openssl rand -hex 32)."
+    )
+if len(SECRET_KEY) < 32:
+    raise RuntimeError(
+        "JWT_SECRET_KEY es demasiado corta (mínimo 32 caracteres). "
+        "Genera una con: openssl rand -hex 32"
+    )
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
@@ -17,9 +36,14 @@ class Token(BaseModel):
 
 class User(BaseModel):
     username: str
-    tenant_id: str
+    # El tenant_id se interpola en 'SET app.current_tenant' en la capa de datos.
+    # Tiparlo como UUID hace que Pydantic rechace en el borde cualquier valor que
+    # pudiera transportar SQL, y garantiza la forma canónica aguas abajo.
+    tenant_id: uuid.UUID
 
 # Mock Database of users
+# NOTA: no es un sistema de autenticación real. Las contraseñas están en claro y
+# sirven únicamente para demostrar el aislamiento multi-tenant del sandbox.
 FAKE_USERS_DB = {
     "bryan": {
         "username": "bryan",
@@ -62,7 +86,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -70,11 +94,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        tenant_id: str = payload.get("tenant_id")
+        username = payload.get("sub")
+        tenant_id = payload.get("tenant_id")
         if username is None or tenant_id is None:
             raise credentials_exception
-    except jwt.PyJWTError:
+        # Un tenant_id mal formado levanta ValidationError aquí, no un 500 aguas abajo.
+        return User(username=username, tenant_id=tenant_id)
+    except (jwt.PyJWTError, ValidationError):
         raise credentials_exception
-        
-    return User(username=username, tenant_id=tenant_id)

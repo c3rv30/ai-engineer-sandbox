@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 import json
 import os
 import argparse
@@ -177,7 +178,7 @@ async def generate_embeddings(chunks: List[DocumentChunk]) -> List[DocumentChunk
 from src.services.graphrag import extract_knowledge_graph, insert_knowledge_graph
 
 @observe(name="insert_documents_db")
-async def insert_documents(chunks: List[DocumentChunk], source: str, tenant_id: str) -> List[str]:
+async def insert_documents(chunks: List[DocumentChunk], source: str, tenant_id: uuid.UUID) -> List[str]:
     """Inserta chunks y devuelve los IDs generados."""
     if not chunks:
         return []
@@ -208,7 +209,7 @@ async def insert_documents(chunks: List[DocumentChunk], source: str, tenant_id: 
         await conn.close()
 
 @observe(name="ingestion_pipeline")
-async def ingest_file(file_path: str, tenant_id: str) -> IngestionResult:
+async def ingest_file(file_path: str, tenant_id: uuid.UUID) -> IngestionResult:
     print(f"Procesando {file_path}...")
     chunks = []
     
@@ -256,7 +257,9 @@ async def ingest_file(file_path: str, tenant_id: str) -> IngestionResult:
 async def main():
     parser = argparse.ArgumentParser(description="Ingesta Multimodal (MD, PDF, Imágenes) a PostgreSQL")
     parser.add_argument("file", help="Ruta al archivo a ingestar")
-    parser.add_argument("--tenant", help="ID del Tenant para RLS", default="00000000-0000-0000-0000-000000000000")
+    # type=uuid.UUID hace que argparse valide y rechace un tenant mal formado.
+    parser.add_argument("--tenant", help="ID del Tenant para RLS (UUID)", type=uuid.UUID,
+                        default=uuid.UUID("00000000-0000-0000-0000-000000000000"))
     args = parser.parse_args()
     if not os.path.exists(args.file):
         print(f"Error: El archivo '{args.file}' no existe.")
