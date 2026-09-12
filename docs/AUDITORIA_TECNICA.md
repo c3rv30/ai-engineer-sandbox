@@ -74,7 +74,8 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `SEC-01` | ✅ corregido | 2026-09-11 | `JWT_SECRET_KEY` obligatoria por entorno, mínimo 32 caracteres; token con la clave antigua → 401 |
 | `SEC-02` | ✅ corregido | 2026-09-11 | `tenant_id` tipado como `uuid.UUID` en el borde; inyección SQL en el token → 401; RLS verificado contra la BD real |
 | `BUG-01` | ✅ corregido | 2026-09-11 | Objeto de stream separado del persistido; 4 de 8 filas contaminadas purgadas de `semantic_cache` |
-| `BUG-03` | ✅ corregido | 2026-09-11 | Historial propagado hasta el supervisor; verificado en 5 fases con control negativo. Queda derivado: el redactor sigue recibiendo la query cruda |
+| `BUG-03` | ✅ corregido | 2026-09-11 | Historial propagado hasta el supervisor; verificado en 5 fases con control negativo |
+| `BUG-03` (derivado) | ✅ corregido | 2026-09-12 | El redactor también recibe el historial; formateo compartido en `history.py`. La respuesta a un seguimiento pasa de volcar 11 años del CV a una frase exacta |
 | Los otros 23 | ⬜ abiertos | — | — |
 
 ---
@@ -165,7 +166,8 @@ Estado real de cada archivo, contrastado contra el inventario de `PAPER_PLAN.md`
 
 | Archivo | Líneas | LLM | Postgres | Estado | Observaciones |
 |---|:---:|:---:|:---:|:---:|---|
-| `src/services/router.py` | 81 | ✅ | — | ✅ | Prompt bien construido; el parámetro `history` nunca recibe datos |
+| `src/services/router.py` | 81 | ✅ | — | ✅ | Prompt bien construido; el parámetro `history` nunca recibe datos (corregido, `BUG-03`) |
+| `src/services/history.py` | 33 | — | — | ✅ | Añadido al corregir `BUG-03`: formatea la ventana de historial para router y redactor |
 | `src/services/retriever.py` | 75 | — | ✅ | ⚠️ | `SEC-02`, `PERF-01`, `PERF-02`. RRF correcto |
 | `src/services/reranker.py` | 46 | — | — | ⚠️ | `BUG-08`. Instancia única del `Ranker`; usa `asyncio.to_thread` correctamente |
 | `src/services/extractor.py` | 90 | ✅ | — | ⚠️ | `DOC-01`: `generate_answer_stream` (l. 56-90) es código muerto |
@@ -823,17 +825,21 @@ SIN historial (0/4), misma pregunta literal:
 
 Ambos endpoints quedan cubiertos: `/chat/` y `/chat/stream` propagan el historial por igual. Hubo que purgar el caché semántico entre fases, porque si no la segunda pregunta es un *cache hit* de la primera y el control negativo deja de ser válido —una consecuencia directa de `BUG-02`—. La base de datos quedó en su estado inicial (4 filas de `semantic_cache`, 3 de `user_memory`, 0 de `rag_evaluations`).
 
-**Alcance residual: el redactor sigue sin ver el historial.** La corrección reconecta el historial con el **supervisor**, que es donde el defecto estaba localizado, y con ello la recuperación pasa a ser la correcta. Pero `generator_node` (`nodes.py:105`) invoca `generate_answer(query=state["query"], …)` con la pregunta cruda:
+**Derivado, ya cerrado: el redactor tampoco veía el historial.** La corrección de arriba reconecta el historial con el **supervisor**, que es donde el defecto estaba localizado, y con ello la recuperación pasa a ser la correcta. Pero al verificarlo se vio que `generator_node` (`nodes.py:105`) invocaba `generate_answer(query=state["query"], …)` con la pregunta cruda, así que el redactor recibía el contexto correcto sin saber a qué se refería *"y"*, y respondía enumerando la cronología completa del CV —los mismos 11 años con y sin historial— en lugar de acotarse al período de Betterfly. Recuperar lo correcto estaba resuelto; redactar sobre el referente correcto, no.
 
-```python
-response = await generate_answer(
-    query=state["query"],          # "¿Y en qué años?" — sin el turno anterior
-    context=state["documents"],
-    user_profile=state["user_profile"]
-)
-```
+Se cerró propagando `history` también a `generate_answer`, con una instrucción explícita en su prompt para resolver la correferencia y no volcar el contexto sobrante. De paso, el formateo del historial —ventana de 4 turnos y descarte de turnos malformados— se extrajo a `src/services/history.py`, porque router y redactor deben aplicar exactamente las mismas reglas y tenerlas duplicadas es la forma en que vuelven a divergir.
 
-El efecto medido: con el contexto correcto ya recuperado, el redactor sigue sin saber a qué se refiere *"y"*, y responde enumerando la cronología completa del CV (los mismos 11 años con y sin historial) en lugar de acotarse al período de Betterfly. Es decir, **la mitad del recorrido —recuperar lo correcto— está resuelta; la otra —redactar sobre el referente correcto— no**. Propagar `history` también a `generate_answer` es un cambio del mismo tamaño que este, y queda anotado como trabajo pendiente derivado.
+El efecto sobre la respuesta final, misma pregunta literal:
+
+| | Respuesta a *"¿Y en qué años?"* | Años citados |
+|---|---|:---:|
+| Antes | Volcado de la cronología completa del CV (1.039–1.202 caracteres) | 11 |
+| Después, **con** historial | *"Bryan trabajó en Betterfly como Ingeniero de Software Senior – Back End desde **Abril 2024 hasta el presente**."* (111 caracteres) | 1 |
+| Después, **sin** historial (control) | *"No puedo responder… es una pregunta de seguimiento que depende de una pregunta previa… Por favor, clarifica cuál es el tema."* | 0 |
+
+El control mejora por partida doble: sin historial el sistema ya no inventa una respuesta plausible volcando todo lo que recuperó, sino que declara que le falta el referente y pide la aclaración. Las 13 comprobaciones de recuperación y redacción pasan en las dos corridas, y la base de datos vuelve a su estado inicial en ambas.
+
+`generate_answer_stream` (`extractor.py:56`) no se tocó: es código muerto desde la migración a LangGraph y su destino se decide en `DOC-01`.
 
 ---
 

@@ -101,13 +101,14 @@ async def generator_node(state: AgentState) -> dict:
     """
     print("✍️ [Redactor] Generando respuesta estructurada...")
     
-    # En un LangGraph complejo, el generator lee todo el historial (messages) 
-    # pero aquí reutilizaremos nuestra robusta función estructurada.
-    
+    # El canal 'messages' del estado no lo escribe ningún nodo, así que el
+    # historial de la conversación viaja por 'history', igual que en el supervisor.
+
     response = await generate_answer(
         query=state["query"], 
         context=state["documents"], 
-        user_profile=state["user_profile"]
+        user_profile=state["user_profile"],
+        history=state.get("history", [])
     )
     
     return {

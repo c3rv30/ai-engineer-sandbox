@@ -1,27 +1,39 @@
 import os
-from typing import List
+from typing import List, Dict, Optional
 import instructor
 from anthropic import AsyncAnthropic
 from langfuse import observe
 
 from src.models.search import RerankedResult
 from src.models.structured import StructuredAnswer
+from src.services.history import format_history
 
 # Inicializar cliente Anthropic y envolverlo con instructor
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 client = instructor.from_anthropic(anthropic_client)
 
 @observe(name="generate_structured_answer")
-async def generate_answer(query: str, context: List[RerankedResult], user_profile: str = "") -> StructuredAnswer:
+async def generate_answer(
+    query: str,
+    context: List[RerankedResult],
+    user_profile: str = "",
+    history: Optional[List[Dict[str, str]]] = None,
+) -> StructuredAnswer:
     """
     Toma la pregunta y el contexto recuperado, e invoca a Anthropic (Claude)
     para generar una respuesta estructurada validada con Pydantic.
+
+    Recibe también el historial: sin él, una pregunta de seguimiento como
+    "¿Y en qué años?" no tiene referente, y el redactor responde volcando todo
+    el contexto recuperado en lugar de acotarse a lo que se le preguntó.
     """
     
     # Preparar el contexto en texto plano
     context_text = ""
     for idx, c in enumerate(context, 1):
         context_text += f"\n--- Documento {idx} (ID: {c.id}) ---\n{c.content}\n"
+
+    history_str = format_history(history)
 
     prompt = f"""
     Eres un asistente experto de AI Engineering. Tu objetivo es responder a la pregunta del usuario utilizando ÚNICAMENTE la información provista en el Contexto.
@@ -30,7 +42,10 @@ async def generate_answer(query: str, context: List[RerankedResult], user_profil
     
     {user_profile}
     
+    {history_str}
     Pregunta: {query}
+    
+    IMPORTANTE: Si la pregunta depende del historial (ej: "¿Y en qué años?"), resuelve primero a qué se refiere usando el turno anterior y responde ÚNICAMENTE sobre ese referente. El Contexto puede traer documentos de más: no lo vuelques entero, responde solo lo que se te preguntó.
     
     Contexto:
     {context_text}

@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
 from langfuse import observe
 
+from src.services.history import format_history
+
 # Parchear el cliente de Anthropic con Instructor
 client = instructor.from_anthropic(AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY")))
 
@@ -37,22 +39,8 @@ async def analyze_query(query: str, history: list = None) -> QueryIntent:
     """
     Agente enrutador: Analiza la intención del usuario y resuelve correferencias usando el historial.
     """
-    history_str = ""
-    if history:
-        # Formatear el historial reciente (últimos 4 mensajes para no inflar el token count)
-        recent_history = history[-4:]
-        lineas = []
-        for msg in recent_history:
-            # El historial lo envía el cliente: un turno sin 'role'/'content' no debe
-            # tumbar la petición entera con un KeyError, simplemente se ignora.
-            if not isinstance(msg, dict):
-                continue
-            role, content = msg.get("role"), msg.get("content")
-            if role and content:
-                lineas.append(f"- {role.upper()}: {content}")
-        if lineas:
-            history_str = "Historial reciente de la conversación:\n" + "\n".join(lineas) + "\n"
-            
+    history_str = format_history(history)
+
     prompt = f"""
     Eres el "Router" de un AI Engineer Sandbox que actualmente está analizando el currículum y perfil profesional del ingeniero Bryan Bobadilla.
     
