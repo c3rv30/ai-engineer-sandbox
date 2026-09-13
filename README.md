@@ -55,7 +55,7 @@ graph TD
 *   **HyDE & Multi-Query:** Transformación de la consulta original por parte del Supervisor para mitigar la ambigüedad antes de tocar la base de datos.
 
 ### 3. 🛡️ Seguridad, Rendimiento y Producción
-*   **Streaming SSE + Pydantic v2:** Generación estructurada de respuestas parciales en tiempo real a través de Server-Sent Events usando la librería `Instructor`. Garantiza JSON determinista sin alucinaciones de sintaxis.
+*   **Streaming SSE + Pydantic v2:** Generación estructurada de respuestas parciales en tiempo real a través de Server-Sent Events usando la librería `Instructor`. El redactor emite el texto según lo genera por el canal `custom` de LangGraph, intercalado con el progreso de cada nodo del grafo. Garantiza JSON determinista sin alucinaciones de sintaxis.
 *   **Multi-Tenancy por Base de Datos (RLS):** Autenticación mediante JWT. Total aislamiento de datos de clientes aplicando Políticas de Seguridad a Nivel de Fila (Row-Level Security) nativas en PostgreSQL.
 *   **Caché Semántico:** Interceptación de preguntas repetidas. Si el *cos_distance* de la pregunta actual vs el historial es menor a 0.15, devuelve la respuesta cacheada sin consumir tokens de LLM (0% de latencia y costo).
 

@@ -97,12 +97,19 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                 needs_more_info=False
             )
             
-            # Usamos astream() de LangGraph para capturar el progreso de los nodos
+            # Dos canales a la vez: 'custom' trae el texto del redactor según se
+            # genera (lo escribe generator_node con get_stream_writer) y 'updates'
+            # trae el progreso por nodo y el estado final.
             final_dict = None
             accumulated_answer = ""
             retrieved_docs = []
-            async for output in agent_graph.astream(initial_state):
-                for node_name, state_update in output.items():
+            async for mode, chunk in agent_graph.astream(initial_state, stream_mode=["updates", "custom"]):
+                if mode == "custom":
+                    accumulated_answer += chunk.get("delta", "")
+                    yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
+                    continue
+
+                for node_name, state_update in chunk.items():
                     if node_name == "supervisor":
                         accumulated_answer += "🤖 *Supervisor evaluando estrategia...*\n\n"
                         yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
@@ -111,22 +118,23 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                             retrieved_docs = state_update["documents"]
                         accumulated_answer += "🔍 *Investigador buscando en Postgres Vector y GraphRAG...*\n\n"
                         yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
-                    elif node_name == "generator":
-                        accumulated_answer += "✍️ *Redactor estructurando respuesta final...*\n\n---\n\n"
-                        yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
-                        
-                        if "final_answer" in state_update and state_update["final_answer"]:
-                            # Objeto limpio: es el que se persiste en caché y el que
-                            # se envía al juez del evaluador. No debe llevar los
-                            # mensajes de progreso, que son artefactos de la UI.
-                            final_dict = state_update["final_answer"].model_dump()
-                            # Objeto para el stream: prolonga el texto ya emitido,
-                            # porque el frontend renderiza diffs de caracteres.
-                            stream_dict = {
-                                **final_dict,
-                                "answer": accumulated_answer + (final_dict.get("answer") or ""),
-                            }
-                            yield f"data: {json.dumps(stream_dict)}\n\n"
+
+                    if state_update and state_update.get("final_answer"):
+                        # Objeto limpio: es el que se persiste en caché y el que
+                        # se envía al juez del evaluador. No debe llevar los
+                        # mensajes de progreso, que son artefactos de la UI.
+                        final_dict = state_update["final_answer"].model_dump()
+                        # El redactor ya emitió su texto por el canal 'custom'. El
+                        # supervisor no: resuelve saludos, temas fuera de alcance y
+                        # herramientas él mismo y el grafo termina ahí, así que su
+                        # respuesta hay que añadirla o el cliente se queda con la
+                        # línea de progreso y nada más.
+                        if node_name != "generator":
+                            accumulated_answer += final_dict.get("answer") or ""
+                        # Objeto para el stream: prolonga el texto ya emitido,
+                        # porque el frontend renderiza diffs de caracteres.
+                        stream_dict = {**final_dict, "answer": accumulated_answer}
+                        yield f"data: {json.dumps(stream_dict)}\n\n"
                             
             if final_dict:
                 await save_semantic_cache(current_user.tenant_id, request.query, final_dict)

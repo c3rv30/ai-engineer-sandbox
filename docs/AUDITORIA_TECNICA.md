@@ -43,6 +43,8 @@ El valor de esta auditoría no está en cuestionar el diseño sino en registrar 
 | Higiene del repositorio | — | — | 2 | 2 | **4** |
 | **Total** | **2** | **11** | **12** | **3** | **28** |
 
+> **Posterior a la foto.** `BUG-09` (🟠) se encontró el 2026-09-13 al reescribir el bucle de streaming para `DOC-01`, y está en el índice y en la tabla de remediación. No se suma a este recuento, que es el estado del 2026-09-10.
+
 ### Criterios de severidad
 
 | Nivel | Definición aplicada |
@@ -76,7 +78,9 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `BUG-01` | ✅ corregido | 2026-09-11 | Objeto de stream separado del persistido; 4 de 8 filas contaminadas purgadas de `semantic_cache` |
 | `BUG-03` | ✅ corregido | 2026-09-11 | Historial propagado hasta el supervisor; verificado en 5 fases con control negativo |
 | `BUG-03` (derivado) | ✅ corregido | 2026-09-12 | El redactor también recibe el historial; formateo compartido en `history.py`. La respuesta a un seguimiento pasa de volcar 11 años del CV a una frase exacta |
-| Los otros 23 | ⬜ abiertos | — | — |
+| `DOC-01` | ✅ corregido | 2026-09-13 | Streaming token-a-token recuperado por el canal `custom` de LangGraph: 4 → 244 eventos SSE, primer texto 13,5 s → 9,6 s, medido contra servidor real |
+| `BUG-09` | ✅ corregido | 2026-09-13 | Hallazgo nuevo: el stream no devolvía respuesta para saludos, fuera de alcance ni herramientas. Corregido con `DOC-01` |
+| Los otros 22 | ⬜ abiertos | — | — |
 
 ---
 
@@ -96,6 +100,7 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `BUG-06` | 🟡 | `top_k_retrieve` / `top_k_rerank` son decorativos | `src/models/requests.py:7` | 2 |
 | `BUG-07` | 🟡 | La única suite de tests no puede ejecutarse | `tests/test_rag.py:28` | 5 |
 | `BUG-08` | 🟠 | Caché del re-ranker en `/tmp`: la app deja de arrancar al perderse | `src/services/reranker.py:10` | 0 |
+| `BUG-09` | 🟠 | `/chat/stream/` no responde a saludos, fuera de alcance ni herramientas | `src/api/routers/chat.py:102` | 2 |
 | `PERF-01` | 🟠 | Sin connection pool: ~11 conexiones por consulta | 9 `asyncpg.connect()` | 3 |
 | `PERF-02` | 🟠 | Cuatro copias del modelo de embeddings en RAM | 4 módulos de `src/services/` | 3 |
 | `PERF-03` | 🟡 | `model.encode` bloquea el event loop en la ingesta | `src/services/ingestion.py:72` | 3 |
@@ -170,7 +175,7 @@ Estado real de cada archivo, contrastado contra el inventario de `PAPER_PLAN.md`
 | `src/services/history.py` | 33 | — | — | ✅ | Añadido al corregir `BUG-03`: formatea la ventana de historial para router y redactor |
 | `src/services/retriever.py` | 75 | — | ✅ | ⚠️ | `SEC-02`, `PERF-01`, `PERF-02`. RRF correcto |
 | `src/services/reranker.py` | 46 | — | — | ⚠️ | `BUG-08`. Instancia única del `Ranker`; usa `asyncio.to_thread` correctamente |
-| `src/services/extractor.py` | 90 | ✅ | — | ⚠️ | `DOC-01`: `generate_answer_stream` (l. 56-90) es código muerto |
+| `src/services/extractor.py` | 90 | ✅ | — | ⚠️ | `DOC-01`: `generate_answer_stream` (l. 56-90) es código muerto (corregido: hoy es el camino normal) |
 | `src/services/graphrag.py` | 99 | ✅ | ✅ | ⚠️ | `SEC-02`, `SEC-03`, `PERF-01` |
 | `src/services/ingestion.py` | 267 | ✅ | ✅ | ⚠️ | `DOC-06`, `PERF-02`, `PERF-03`. Multimodal (MD/TXT/PDF/imagen) correcto |
 | `src/services/cache.py` | 62 | — | ✅ | ⚠️ | `SEC-02`, `PERF-01`, `PERF-02` |
@@ -211,8 +216,8 @@ Los `GRANT` marcados como "falla" son los de `BUG-04`: se ejecutan antes de que 
 | Archivo | Motivo | Referencia |
 |---|---|---|
 | `src/pipeline.py` (44 l.) | `retrieve_documents(query, top_k=5)` sin `tenant_id` → `TypeError` | `HYG-02` |
+| ~~`src/services/extractor.py:56-90`~~ | ~~`generate_answer_stream` nunca invocada~~ — resucitada al corregir `DOC-01` | `DOC-01` |
 | `tests/test_rag.py` (rota) | mismo `TypeError` en l. 28 | `BUG-07` |
-| `src/services/extractor.py:56-90` | `generate_answer_stream` nunca invocada | `DOC-01` |
 | `src/models/requests.py:10-11` | `IngestRequest` nunca usada (el endpoint usa `UploadFile`) | `HYG-02` |
 | `src/services/ingestion.py:48` | parámetro `overlap` declarado y nunca leído | `DOC-06` |
 | `src/services/agent_graph/state.py:9` | `messages` declarado, siempre `[]` | `BUG-03` |
@@ -1231,6 +1236,59 @@ RUN python -c "from flashrank import Ranker; \
 
 ---
 
+### `BUG-09` 🟠 `/chat/stream/` no devuelve respuesta para saludos, temas fuera de alcance ni herramientas
+
+> Hallazgo posterior a la auditoría, encontrado el 2026-09-13 al reescribir el bucle de streaming para `DOC-01`. No entra en los recuentos del §1, que son la foto del 2026-09-10.
+
+**Ubicación.** `src/api/routers/chat.py:102-120` (código anterior a la corrección de `DOC-01`)
+
+**Síntoma.** Un saludo por el endpoint de streaming devuelve **un solo evento SSE con la línea de progreso y nada más**:
+
+```
+eventos SSE: 1
+  answer='🤖 *Supervisor evaluando estrategia...*\n\n'  confidence=None
+```
+
+La misma pregunta por `/chat/` responde correctamente. El endpoint afectado es justamente el que usa el frontend (`app.py:90` hace POST a `/chat/stream/`), así que el defecto se manifiesta en la aplicación real y no en el camino secundario.
+
+**Causa.** El supervisor resuelve por sí mismo tres de las cuatro intenciones —`casual_greeting`, `out_of_scope` y `tool_execution`— devolviendo `final_answer` y enrutando a `END` sin pasar por el redactor (`nodes.py:28-55`, `graph.py:5-9`). El bucle del stream, en cambio, solo leía `final_answer` dentro de la rama `node_name == "generator"`:
+
+```python
+elif node_name == "generator":
+    ...
+    if "final_answer" in state_update and state_update["final_answer"]:
+```
+
+Cuando el grafo termina en el supervisor esa rama no se ejecuta nunca, así que la respuesta se queda en el estado y no llega al cliente. Como efecto colateral, `final_dict` sigue siendo `None` y tampoco se guarda nada en el caché semántico.
+
+**Alcance.** Las tres herramientas (`get_current_time`, `get_crypto_price`, `get_github_profile`), los saludos y las preguntas fuera de alcance. Es decir, todo lo que no sea `knowledge_search`.
+
+**Por qué no lo detectó la auditoría.** El §5 revisó el bucle de streaming buscando contaminación del caché (`BUG-01`) y la ruta del historial (`BUG-03`), ambos sobre el camino `knowledge_search`. Los otros tres caminos se verificaron sobre `/chat/`, donde funcionan. Es un recordatorio de que la cobertura por endpoint no equivale a cobertura por rama del grafo.
+
+**Reproducción.**
+
+```bash
+# Con el caché purgado, para que no intercepte:
+curl -N -X POST http://127.0.0.1:8000/chat/stream/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query": "Hola, qué tal", "history": []}'
+# → un unico evento, solo la linea de progreso
+```
+
+**Corrección.** Sacar la lectura de `final_answer` fuera de la rama del generador, y añadir el texto al acumulado cuando el nodo que la produjo no es el redactor (el redactor ya emitió el suyo por el canal `custom`):
+
+```python
+if state_update and state_update.get("final_answer"):
+    final_dict = state_update["final_answer"].model_dump()
+    if node_name != "generator":
+        accumulated_answer += final_dict.get("answer") or ""
+    yield f"data: {json.dumps({**final_dict, 'answer': accumulated_answer})}\n\n"
+```
+
+**Estado: ✅ corregido (2026-09-13).** Corregido junto a `DOC-01`, por caer dentro del mismo bucle. Verificado: el saludo devuelve el texto del supervisor y `get_current_time` devuelve su resultado, ambos por el stream.
+
+---
+
 ## 6. Rendimiento
 
 ### `PERF-01` 🟠 Sin connection pool: ~11 conexiones por consulta
@@ -1616,6 +1674,25 @@ Requiere que `generator_node` invoque `generate_answer_stream` y que LangGraph p
 **(b) Alinear la documentación con la realidad.** Borrar `generate_answer_stream` (código muerto), reescribir la característica del README como *"Streaming de progreso por nodo vía SSE"* —que es honesto y sigue siendo una buena característica— y añadir una nota en `TROUBLESHOOTING.md` §4-5 indicando que describen la implementación de la Fase 3, sustituida en la Fase 4.
 
 Cualquiera de las dos es aceptable. Lo que no lo es es el estado actual: una característica anunciada con función muerta en el árbol.
+
+**Estado: ✅ corregido (2026-09-13) por la vía (a).** Se recuperó el streaming token-a-token.
+
+**Corrección al camino propuesto.** El boceto de (a) no habría funcionado: `astream_events` emite `on_chat_model_stream` solo para *chat models* de LangChain, y este proyecto llama al SDK de Anthropic directamente a través de `instructor`. Por ese camino no habría llegado ni un token. El mecanismo correcto para esta arquitectura es el canal `custom` del grafo: `generator_node` obtiene un `get_stream_writer()` y escribe los fragmentos según los recibe; `/chat/stream/` consume `astream(stream_mode=["updates", "custom"])`, que entrega tuplas `(modo, chunk)` con los `custom` intercalados antes del `updates` del nodo. Fuera de un contexto de streaming —el `ainvoke` de `/chat/`— el writer es un no-op, así que el endpoint no-streaming no se entera.
+
+`generate_answer_stream` deja de ser código muerto y cambia de contrato: emite el modelo parcial en lugar de su JSON serializado, porque el nodo necesita el texto incremental para el SSE y el objeto final para el estado. Además, ambos redactores pasan a compartir `_build_prompt()`: tener dos copias del prompt fue justamente la causa de que la instrucción anti-texto-plano de [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) §6 viviera solo en la versión muerta (ver Anexo D).
+
+**Medido contra un servidor real** —no con `TestClient`, que bufferiza la respuesta entera y da tiempos idénticos para todos los eventos—, misma pregunta:
+
+| | Eventos SSE | 1er texto del redactor | Respuesta completa |
+|---|:---:|:---:|:---:|
+| Antes | 4 | 13,49 s (el bloque entero de golpe) | 13,91 s |
+| Después | 244 | 9,55 s | 12,51 s |
+
+El texto empieza unos 4 segundos antes y los últimos ~3 segundos son escritura en vivo. Conviene no exagerar la mejora: el grueso de la latencia no está en la generación sino en recuperación y re-ranking, así que el usuario sigue esperando unos 9 segundos antes de ver la primera letra. Reducir esa parte es asunto de `PERF-01` y `PERF-02`.
+
+**Dos detalles que hubo que resolver.** El ciclo de auto-corrección (`BUG-05`) puede pasar por el redactor dos veces, y `stream_parser()` (`app.py:118`) solo renderiza cuando el texto crece: un segundo borrador que encogiera la cadena desincronizaría la UI. Por eso el reintento se anuncia y se encadena en lugar de reemplazar. Y como en `Partial` todos los campos son opcionales, un parcial que nunca cierre el esquema —generación truncada por `max_tokens`, corte a media respuesta— no se rellena a mano: se repliega a `generate_answer` y se encadena su respuesta.
+
+El frontend no se tocó: `stream_parser()` se escribió para esto y hasta ahora recibía cuatro eventos donde esperaba cientos. Verificado además que lo persistido en caché y lo enviado al evaluador siguen limpios de los mensajes de progreso (`BUG-01`), que el saludo, las herramientas y el endpoint no-streaming siguen bien, y que la resolución de correferencias (`BUG-03`) sigue funcionando sobre el camino de streaming.
 
 ---
 
@@ -2471,8 +2548,8 @@ Siete invocaciones, todas vía `instructor.from_anthropic(AsyncAnthropic(...))` 
 | # | Función | Archivo:línea | `response_model` | `max_tokens` | Momento | Observaciones |
 |:---:|---|---|---|:---:|---|---|
 | 1 | `analyze_query` | `router.py:74` | `QueryIntent` | 500 | Síncrono (supervisor) | Historial siempre vacío (`BUG-03`) |
-| 2 | `generate_answer` | `extractor.py:41` | `StructuredAnswer` | 8192 | Síncrono (generador) | — |
-| 3 | `generate_answer_stream` | `extractor.py:76` | `Partial[StructuredAnswer]` | 8192 | **Nunca** | Código muerto (`DOC-01`) |
+| 2 | `generate_answer` | `extractor.py:41` | `StructuredAnswer` | 8192 | Síncrono (generador) | Tras `DOC-01`, solo como repliegue |
+| 3 | `generate_answer_stream` | `extractor.py:76` | `Partial[StructuredAnswer]` | 8192 | **Nunca** | Código muerto (`DOC-01`) — corregido: hoy es el camino normal del redactor |
 | 4 | `extract_and_save_facts` | `memory.py:36` | `ExtractedFacts` | 200 | Background | Excepciones absorbidas |
 | 5 | `extract_knowledge_graph` | `graphrag.py:35` | `KnowledgeGraphExtraction` | 1024 | Ingestión (por chunk) | Excepciones absorbidas |
 | 6 | `evaluate_rag_response` | `evaluator.py:58` | `RAGEvaluation` | 300 | Background | `PERF-04`, `DOC-02` |
@@ -2503,7 +2580,7 @@ Los seis prompts que gobiernan el comportamiento, con su ubicación exacta para 
 **Observaciones.**
 
 - El prompt del router (`router.py:49`) codifica el dominio como constante: *"un AI Engineer Sandbox que actualmente está analizando el currículum y perfil profesional del ingeniero Bryan Bobadilla"*. Es la solución documentada en `TROUBLESHOOTING.md` §1 y funciona, pero acopla el sistema a un caso de uso concreto: cualquier tenant que ingiera otro tipo de documento recibe un router sesgado hacia un CV que no es el suyo. En un sistema multi-tenant real, ese contexto debería derivarse del corpus del tenant.
-- El prompt del generador (`extractor.py:26-37`) **no incluye** la instrucción anti-texto-plano que sí tiene la versión de streaming (`extractor.py:67`), pese a que `TROUBLESHOOTING.md` §6 documenta ese fallo como genérico de Haiku ante peticiones de análisis largo. Como la versión de streaming está muerta (`DOC-01`), **la instrucción que resolvió el bug no se aplica en el único camino activo**. Es un hallazgo derivado de `DOC-01` que conviene corregir junto a él.
+- El prompt del generador (`extractor.py:26-37`) **no incluye** la instrucción anti-texto-plano que sí tiene la versión de streaming (`extractor.py:67`), pese a que `TROUBLESHOOTING.md` §6 documenta ese fallo como genérico de Haiku ante peticiones de análisis largo. Como la versión de streaming está muerta (`DOC-01`), **la instrucción que resolvió el bug no se aplica en el único camino activo**. Es un hallazgo derivado de `DOC-01` que conviene corregir junto a él. **Corregido (2026-09-13):** los dos redactores comparten ahora `_build_prompt()`, así que la instrucción se aplica en ambos y no puede volver a divergir.
 - Todos los prompts van en el turno `user`; ninguno usa el parámetro `system` de la API de Anthropic, que es el lugar canónico para instrucciones de rol y habilita el caching de prompt cuando el contenido es estable. Para el router y el evaluador —cuyas instrucciones son idénticas en cada invocación— sería una optimización directa de coste y latencia.
 
 ---

@@ -1,11 +1,13 @@
 import asyncio
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langgraph.config import get_stream_writer
+from pydantic import ValidationError
 from src.services.agent_graph.state import AgentState
 from src.services.router import analyze_query
 from src.services.retriever import retrieve_documents
 from src.services.reranker import rerank_documents
 from src.services.graphrag import retrieve_subgraph
-from src.services.extractor import generate_answer
+from src.services.extractor import generate_answer, generate_answer_stream
 from src.services.tools import TOOLS_REGISTRY
 from src.models.search import SearchResult
 from src.models.structured import StructuredAnswer
@@ -98,19 +100,62 @@ async def generator_node(state: AgentState) -> dict:
     """
     Genera la respuesta final. Actúa también como "Reviewer" básico.
     Si la respuesta requiere más información, marca el flag.
+
+    Emite el texto según se genera por el canal 'custom' de LangGraph, que es
+    lo que convierte a /chat/stream en streaming real y no en cuatro avisos de
+    progreso. Fuera de un contexto de streaming —por ejemplo bajo el ainvoke
+    de /chat/— el writer es un no-op y el nodo se comporta igual que antes.
     """
     print("✍️ [Redactor] Generando respuesta estructurada...")
-    
+    writer = get_stream_writer()
+
     # El canal 'messages' del estado no lo escribe ningún nodo, así que el
     # historial de la conversación viaja por 'history', igual que en el supervisor.
-
-    response = await generate_answer(
-        query=state["query"], 
-        context=state["documents"], 
+    kwargs = dict(
+        query=state["query"],
+        context=state["documents"],
         user_profile=state["user_profile"],
         history=state.get("history", [])
     )
-    
+
+    # El ciclo de auto-corrección puede traernos aquí por segunda vez. El cliente
+    # solo sabe añadir texto (app.py:118 ignora todo lo que no haga crecer la
+    # cadena), así que el reintento se anuncia y se encadena, nunca reemplaza.
+    es_reintento = state.get("iterations", 0) > 1
+    writer({"delta": "🔄 *Revisor: reescribiendo con el contexto ampliado...*\n\n---\n\n"
+                     if es_reintento else
+                     "✍️ *Redactor estructurando respuesta final...*\n\n---\n\n"})
+
+    emitido = ""
+    ultimo_parcial = None
+    try:
+        async for parcial in generate_answer_stream(**kwargs):
+            ultimo_parcial = parcial
+            texto = parcial.answer or ""
+            # Instructor reemite el objeto completo en cada paso; nos quedamos
+            # con lo nuevo. El texto solo puede crecer.
+            if len(texto) > len(emitido):
+                writer({"delta": texto[len(emitido):]})
+                emitido = texto
+    except Exception as e:
+        print(f"⚠️ [Redactor] El streaming falló ({type(e).__name__}); se repliega a generación completa.")
+        ultimo_parcial = None
+
+    response = None
+    if ultimo_parcial is not None:
+        try:
+            response = StructuredAnswer.model_validate(ultimo_parcial.model_dump())
+        except ValidationError:
+            # Parcial que nunca cerró el esquema: generación truncada por
+            # max_tokens o corte a media respuesta. No se rellena a mano.
+            print("⚠️ [Redactor] El parcial no completó el esquema; se repliega a generación completa.")
+
+    if response is None:
+        response = await generate_answer(**kwargs)
+        # Lo ya emitido es un borrador truncado y el cliente no puede retirarlo,
+        # así que se encadena la respuesta buena en lugar de sustituirla.
+        writer({"delta": "\n\n---\n\n" + response.answer})
+
     return {
         "final_answer": response,
         "needs_more_info": response.requires_more_info

@@ -70,6 +70,8 @@ def stream_parser():
 
 Esto permite que el motor interno de WebSockets de Streamlit (`Tornado`) maneje el *backpressure* y renderice visualmente los tokens uno a uno a la velocidad perfecta, creando el auténtico efecto visual de ChatGPT.
 
+*Nota (Fase 4):* con la migración a LangGraph el emisor cambió, no el consumidor. Los tokens ya no salen directamente de `generate_answer_stream` hacia el endpoint: los escribe `generator_node` en el canal `custom` del grafo (`get_stream_writer()`), y `/chat/stream/` los consume junto al progreso por nodo con `astream(stream_mode=["updates", "custom"])`. El `stream_parser()` descrito arriba sigue siendo válido tal cual, porque el formato SSE no cambió: cada evento sigue llevando el `answer` acumulado completo.
+
 ---
 
 ## 5. Problema: Error de Tipos por Objetos Parciales ("NoneType and str")
