@@ -8,8 +8,9 @@
 - `.env.example`: Plantilla de variables de entorno (API keys de Anthropic y JWT secret).
 
 **Base de Datos (SQL)**
-- `sql/01_init.sql`: Script unificado para crear tablas (`documents`, `semantic_cache`, `user_memory`, `rag_evaluations`), habilitar RLS y crear índices HNSW.
-- `sql/apply_cache.sql`, `sql/apply_evaluator.sql`, `sql/apply_graphrag.sql`, `sql/apply_memory.sql`, `sql/apply_rls.sql`, `sql/create_app_user.sql`: Scripts individuales de migración iterativa usados durante el desarrollo.
+- `sql/00_create_app_user.sql`: Crea el rol `app_user` con el que conecta la aplicación. Se ejecuta primero.
+- `sql/01_init.sql`: Script unificado para crear tablas (`documents`, `semantic_cache`, `user_memory`, `rag_evaluations`, `knowledge_graph`), habilitar y forzar RLS, crear índices HNSW y conceder permisos a `app_user`.
+- `sql/migrations/` (`apply_cache.sql`, `apply_evaluator.sql`, `apply_graphrag.sql`, `apply_memory.sql`, `apply_rls.sql`): Scripts individuales de migración iterativa usados durante el desarrollo sobre una base ya existente. El arranque de Docker no los ejecuta.
 
 **Frontend & API (Capa de Presentación)**
 - `src/frontend/app.py`: Cliente Streamlit. Consume SSE (Server-Sent Events) del backend para mostrar streaming en tiempo real.

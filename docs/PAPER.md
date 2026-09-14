@@ -199,7 +199,7 @@ La complejidad temporal total de esta recuperación distribuida se reduce a $\ma
 A este conjunto se le antepone (`.insert(0)`) el string de conocimiento de GraphRAG. El motor ingenuo de **GraphRAG** (`src/services/graphrag.py`) extrae semillas difusas buscando raíces Regex estáticas `\w+` ($len>3$) y realiza una interpolación relacional plana de $1$-hop ($limit = 10$).
 
 ### 5.6. Definición Formal de las Métricas del Evaluador (LLM-as-a-judge)
-El sistema implementa evaluación pasiva probabilística mapeada en un dominio continuo (`sql/01_init.sql`, Líneas 42-44) mediante la función evaluadora (`src/services/evaluator.py`). 
+El sistema implementa evaluación pasiva probabilística mapeada en un dominio continuo (restricciones `CHECK` de la tabla `rag_evaluations` en `sql/01_init.sql`) mediante la función evaluadora (`src/services/evaluator.py`). 
 El LLM juzga la traza asignando puntuaciones normalizadas:
 - $Score \in [0.0, 1.0]$.
 Donde el modelo matemático se descompone en las tres métricas nucleares de Ragas:
@@ -215,7 +215,7 @@ Para trasladar los fundamentos teóricos y las formulaciones abstractas a un sis
 ### 6.1. Estructura del Repositorio y Separación de Responsabilidades
 El proyecto respeta la topología de la *Arquitectura Limpia (Clean Architecture)*.
 - **Configuraciones:** `pyproject.toml` (manejo de dependencias vía `uv`), `.env` y el archivo de despliegue de persistencia `docker-compose.yml`.
-- **`sql/`**: Mantiene los scripts de inicialización DDL (`01_init.sql`) y las migraciones iterativas para HNSW y Row-Level Security (`apply_rls.sql`, `apply_cache.sql`, etc.).
+- **`sql/`**: Mantiene los scripts de inicialización DDL (`00_create_app_user.sql`, `01_init.sql`) y, en `sql/migrations/`, las migraciones iterativas para HNSW y Row-Level Security (`apply_rls.sql`, `apply_cache.sql`, etc.).
 - **`src/api/`**: La capa de presentación REST. `main.py` levanta el servidor asíncrono de FastAPI y configura middlewares de CORS. `auth.py` contiene la lógica de decodificación JWT. La carpeta `routers/` expone los puertos de entrada HTTP (`chat.py` y `ingest.py`), separando completamente las URLs de la lógica de negocio subyacente.
 - **`src/models/`**: Define los contratos de la aplicación utilizando la validación de Pydantic v2 (por ejemplo, `structured.py`, `search.py` y `requests.py`). 
 - **`src/services/`**: Alberga las entrañas algorítmicas del RAG. `ingestion.py`, `retriever.py`, `reranker.py`, `extractor.py`, `cache.py`, `graphrag.py` y `evaluator.py`. Las herramientas de Function Calling residen en `tools.py`.

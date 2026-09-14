@@ -8,4 +8,14 @@ services:
     ports:
       - "5433:5432"
     volumes:
+      # Sobre un volumen vacío se ejecutan los .sql de este directorio en orden
+      # alfabético; los subdirectorios (sql/migrations/) se ignoran.
       - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      # Por TCP a propósito: mientras corren los scripts de inicialización el servidor
+      # temporal solo escucha en el socket Unix, así que 'healthy' significa que ya
+      # terminaron. Si fallan, el contenedor sale en lugar de quedar 'healthy'.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

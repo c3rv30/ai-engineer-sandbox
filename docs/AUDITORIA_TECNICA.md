@@ -83,7 +83,8 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `SEC-04` | ✅ corregido | 2026-09-14 | Temporal con nombre aleatorio; el original solo como metadato. Control negativo contra uvicorn real: 1/9 → 9/9 propiedades; ingesta real 8/8 |
 | `SEC-03` | ✅ corregido | 2026-09-14 | `ILIKE ANY($1::text[])` parametrizado. Con tokenizador permisivo, la versión vieja cae ante los tres payloads, incluida una lectura entre tenants; la nueva, ante ninguno. Mismos resultados en 16 consultas reales |
 | `BUG-02` | ✅ corregido | 2026-09-14 | Lista blanca de intenciones, más confianza y `requires_more_info`, en ambos endpoints. Contra servidor real: 3/8 → 8/8. Antes, *"¿Cuánto vale ethereum?"* recibía el precio de bitcoin desde caché |
-| Los otros 19 | ⬜ abiertos | — | — |
+| `BUG-04` | ✅ corregido | 2026-09-14 | `00_create_app_user` → `01_init` completo; `apply_*` a `sql/migrations/`; healthcheck por TCP. Desde volumen vacío: `exit=3` → `healthy`. Catálogo idéntico al de desarrollo (77/77), RLS 7/7, app real 6/6 |
+| Los otros 18 | ⬜ abiertos | — | — |
 
 ---
 
@@ -997,6 +998,24 @@ Añadir además a `docker-compose.yml` el healthcheck que `ROADMAP_FASE_5_ESCALA
       timeout: 5s
       retries: 5
 ```
+
+**Estado: ✅ corregido (2026-09-14).** La estructura queda como propone el parche: `00_create_app_user.sql` sin su `ALTER TABLE`, un `01_init.sql` completo y los `apply_*.sql` en `sql/migrations/` (el entrypoint ignora los subdirectorios). Hay cuatro ajustes:
+
+- **`01_init.sql` reproduce exactamente la base de desarrollo**, que es contra la que funciona la aplicación. Incluye `knowledge_graph`, `FORCE` en las cinco tablas y los `GRANT`, y además crea los índices **con los nombres que tienen en desarrollo**. Los `apply_*.sql` creaban índices con nombre y el `01_init.sql` anterior los creaba sin él, así que ejecutar ambos habría duplicado cada índice HNSW.
+- **Healthcheck por TCP** (`pg_isready -h 127.0.0.1`) y no por socket, como tenía el parche. El entrypoint arranca el servidor temporal de inicialización con `-c listen_addresses=''` (`docker-entrypoint.sh:297`). Por socket respondería mientras corren los scripts; por TCP, solo cuando han terminado.
+- **Corrección al punto 2.** `FORCE` no rescata el DSN de `.env.example`. `postgres` es superusuario, y un superusuario elude RLS **con o sin `FORCE`** (verificado abajo). `FORCE` sí somete a las políticas a un propietario que no sea superusuario. El aislamiento exige que la aplicación conecte como `app_user`, lo que sigue pendiente en `DOC-03`.
+- **Referencias actualizadas** en `PAPER_PLAN.md`, `GRAPHRAG_ARCHITECTURE.md`, `PAPER.md` y `PAPER_EN.md`. La cita *"`01_init.sql`, líneas 42-44"* de los papers ya era incorrecta antes del cambio: apuntaba a la política del caché, no a los `CHECK` de `rag_evaluations`.
+
+Verificado con el `docker-compose.yml` real, con otro nombre de proyecto y otro puerto mediante un override, sobre volumen vacío y sin tocar la base de desarrollo:
+
+| Prueba | Antes | Después |
+|---|---|---|
+| Arranque desde cero | El contenedor sale con `exit=3` a los 2 s: `apply_cache.sql:20: ERROR: role "app_user" does not exist` | `00_create_app_user.sql` → `01_init.sql`, `ignoring …/migrations`, `healthy` a los 5,3 s, sin errores. Reproducido dos veces |
+| Huella del catálogo frente a la base de desarrollo: columnas (sin posición), índices, restricciones, políticas, RLS/`FORCE`, permisos y ACL | — | **Idéntica**: 77 de 77 líneas |
+| RLS como `app_user` | — | 7/7. Cada tenant ve solo lo suyo, sin tenant no ve nada y la escritura cruzada se rechaza. El superusuario ve todo pese a `FORCE`, y un propietario no superusuario ve 0 filas con `FORCE` y 2 sin él |
+| Aplicación real (ingesta + `/chat/`) contra la base nueva | — | 6/6. 1 fragmento y 7 tripletas ingeridos; la respuesta cita el documento con confianza 1,0; se escriben caché y evaluación bajo el tenant del token; la base de desarrollo sigue intacta |
+
+Una observación de la última prueba: `rag_evaluations` recibió una fila. El evaluador no falla siempre: con un contexto de un solo documento, la respuesta del juez cabe en `max_tokens=300`. Con el contexto del corpus real no cabe (`PERF-04`), y por eso la base de desarrollo no tiene ninguna evaluación.
 
 ---
 

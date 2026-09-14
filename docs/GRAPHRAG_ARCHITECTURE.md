@@ -121,7 +121,7 @@ if graph_context:
 ---
 
 ## 4. Estructura de Archivos Modificada
-* `sql/01_init.sql` (Opcionalmente `apply_graphrag.sql`): Definición de tablas DDL y Row-Level Security.
+* `sql/01_init.sql`: Definición de tablas DDL (incluida `knowledge_graph`) y Row-Level Security. Para una base ya existente, la migración equivalente es `sql/migrations/apply_graphrag.sql`.
 * `src/services/graphrag.py`: Contiene lógica de Extracción (LLM) y Recuperación (SQL).
 * `src/services/ingestion.py`: Modificado para retornar IDs tras la inserción y orquestar las tareas asíncronas de GraphRAG usando `asyncio.gather`.
 * `src/api/routers/chat.py`: Inyección del sub-grafo en el endpoint síncrono (`/chat/`) y asíncrono SSE (`/chat/stream/`).
