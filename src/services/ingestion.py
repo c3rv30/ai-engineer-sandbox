@@ -209,8 +209,11 @@ async def insert_documents(chunks: List[DocumentChunk], source: str, tenant_id: 
         await conn.close()
 
 @observe(name="ingestion_pipeline")
-async def ingest_file(file_path: str, tenant_id: uuid.UUID) -> IngestionResult:
-    print(f"Procesando {file_path}...")
+async def ingest_file(file_path: str, tenant_id: uuid.UUID, source: str | None = None) -> IngestionResult:
+    # Nombre que identifica el documento en metadata["source"]. Se separa de
+    # file_path porque la API ingiere desde un temporal con nombre aleatorio.
+    source = source or os.path.basename(file_path)
+    print(f"Procesando {source}...")
     chunks = []
     
     ext = os.path.splitext(file_path)[1].lower()
@@ -228,7 +231,7 @@ async def ingest_file(file_path: str, tenant_id: uuid.UUID) -> IngestionResult:
         media_type = f"image/{ext[1:]}"
         desc = await describe_image_with_claude(img_bytes, media_type)
         chunks.append(DocumentChunk(
-            text=f"[Imagen {os.path.basename(file_path)}]: {desc}",
+            text=f"[Imagen {source}]: {desc}",
             metadata={"source_type": "standalone_image"}
         ))
     else:
@@ -240,7 +243,7 @@ async def ingest_file(file_path: str, tenant_id: uuid.UUID) -> IngestionResult:
     chunks_with_embeddings = await generate_embeddings(chunks)
     
     print("Insertando en PostgreSQL...")
-    inserted_ids = await insert_documents(chunks_with_embeddings, file_path, tenant_id)
+    inserted_ids = await insert_documents(chunks_with_embeddings, source, tenant_id)
     print(f"-> {len(inserted_ids)} registros insertados.")
     
     print("Ejecutando Pipeline GraphRAG en paralelo...")

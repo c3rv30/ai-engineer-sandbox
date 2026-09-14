@@ -80,7 +80,8 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `BUG-03` (derivado) | ✅ corregido | 2026-09-12 | El redactor también recibe el historial; formateo compartido en `history.py`. La respuesta a un seguimiento pasa de volcar 11 años del CV a una frase exacta |
 | `DOC-01` | ✅ corregido | 2026-09-13 | Streaming token-a-token recuperado por el canal `custom` de LangGraph: 4 → 244 eventos SSE, primer texto 13,5 s → 9,6 s, medido contra servidor real |
 | `BUG-09` | ✅ corregido | 2026-09-13 | Hallazgo nuevo: el stream no devolvía respuesta para saludos, fuera de alcance ni herramientas. Corregido con `DOC-01` |
-| Los otros 22 | ⬜ abiertos | — | — |
+| `SEC-04` | ✅ corregido | 2026-09-14 | Temporal con nombre aleatorio; el original solo como metadato. Control negativo contra uvicorn real: 1/9 → 9/9 propiedades; ingesta real 8/8 |
+| Los otros 21 | ⬜ abiertos | — | — |
 
 ---
 
@@ -542,6 +543,28 @@ Alternativa mínima si se quiere conservar el nombre original con fines de traza
 safe_name = os.path.basename(file.filename)
 temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}_{safe_name}")
 ```
+
+**Estado: ✅ corregido (2026-09-14).** El archivo va a disco con `NamedTemporaryFile` y `file.filename` ya no toca ninguna ruta: se reduce a su `basename` y viaja como metadato por un parámetro nuevo, `ingest_file(..., source=...)`. El parche de arriba, aplicado solo, habría cambiado `metadata["source"]` por el nombre aleatorio del temporal, porque `ingest_file` lo derivaba de la ruta de disco. Por la misma razón, las 22 filas de `documents` de la base auditada guardan como fuente la ruta temporal completa del servidor (`/var/folders/…/T/bbobadilla_resume.pdf`).
+
+**El impacto era mayor que el descrito.** El `finally` borra el archivo al terminar, así que el traversal no solo sobrescribe el destino: lo **elimina**.
+
+Verificado contra uvicorn real con el multipart construido a mano, para que ningún cliente sanee el nombre (starlette 1.6 no lo hace). `ingest_file` se sustituyó por un doble que registra la ruta y el contenido recibidos:
+
+| Propiedad | Antes | Después |
+|---|:---:|:---:|
+| La ruta de disco queda dentro del directorio temporal | ❌ | ✅ |
+| Un archivo víctima alcanzado con `../` sobrevive | ❌ borrado | ✅ |
+| El nombre visible es el `basename`, sin directorios | ❌ | ✅ |
+| Dos tenants subiendo `cv.txt` a la vez ingieren cada uno el suyo | ❌ el tenant A ingirió el de B | ✅ |
+| Ambas subidas terminan en 200 | ❌ B → 500 (el `finally` de A borró su archivo) | ✅ |
+| Rutas temporales distintas | ❌ | ✅ |
+| Temporales borrados tras la petición | ✅ | ✅ |
+
+En la carrera, el doble espera 0,5 s antes de leer para que la ventana no dependa del azar del scheduler. La carrera existe igual sin esa espera.
+
+Ingesta real (Claude y Postgres, sin dobles) de un `.txt` y un `.png` subidos como `../../intruso/<nombre>`: 8/8. `metadata.source` y la etiqueta `[Imagen …]` llevan el nombre original, las filas quedan bajo el tenant del token y GraphRAG extrae sus tripletas. La base se devolvió a su estado inicial.
+
+Queda fuera de este hallazgo: el `except` del endpoint devuelve `detail=str(e)`, y en la prueba de carrera ese 500 entregó al cliente la ruta interna del servidor.
 
 ---
 
