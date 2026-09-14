@@ -112,13 +112,13 @@ The system architecturally distinguishes between *Nodes* (functions executing de
 #### 4.3.2. Researcher Node (`researcher_node`)
 - **Role:** Strictly a **pragmatic node**. It consumes no LLM tokens. Acts as the asynchronous I/O engine interacting with the database.
 - **Invoked LLM Agent:** None.
-- **Execution Logic:** Receives queries (Original Query, Multi-Query Variations, HyDE Document) and fires concurrent SQL queries using `asyncio.gather`. Deduplicates results using Python Hashing Sets, passes the clean list through the local Re-ranker (FlashRank), and attaches the GraphRAG sub-graph. Finally, increments `iterations += 1`.
+- **Execution Logic:** Receives queries (Original Query, Multi-Query Variations, HyDE Document) and fires concurrent SQL queries using `asyncio.gather`. Deduplicates results using Python Hashing Sets, passes the clean list through the local Re-ranker (FlashRank), and attaches the GraphRAG sub-graph. On each retry it widens the retrieval window (`retrieval_window`): it multiplies the candidates per variant and lets 50% more documents through the re-ranking, capped at the API maximums. It sets `retrieval_exhausted` when widening could not bring anything new. Finally, increments `iterations += 1`.
 
 #### 4.3.3. Generator Node (`generator_node`)
 - **Role:** Final synthesizer and logical Reviewer. Compiles the final response for the user and evaluates if it has enough context to answer without hallucinating.
 - **Invoked LLM Agent:** `generate_answer` (`src/services/extractor.py`).
 - **System Prompt:** *"You are an expert answering questions strictly based on the retrieved context... Use [Doc X] to cite. User context: {user_profile}..."*
-- **Termination / Routing Condition:** The model outputs the `StructuredAnswer` Pydantic structure, which contains a boolean flag `requires_more_info`. The node maps this flag to the state as `needs_more_info`. The edge interceptor function (`route_reviewer`) reads this value; if `True` and `iterations` is less than 2, the flow *returns* to the Researcher (Self-Correction); otherwise, it transitions to `END`.
+- **Termination / Routing Condition:** The model outputs the `StructuredAnswer` Pydantic structure, which contains a boolean flag `requires_more_info`. The node maps this flag to the state as `needs_more_info`. The edge interceptor function (`route_reviewer`) reads this value; if `True`, `iterations` is less than 2, and the search can still be widened (`retrieval_exhausted` is `False`), the flow *returns* to the Researcher (Self-Correction); otherwise, it transitions to `END`.
 
 #### 4.3.4. Asynchronous Agents (Background Tasks)
 To avoid blocking the FastAPI event loop (and thus penalizing the latency perceived by the end user), the system delegates heavy workloads to asynchronous "fire-and-forget" tasks.

@@ -83,14 +83,14 @@ Definidas en `src/services/tools.py` y ejecutadas directamente por el **Nodo Sup
 ## 3. Matemática y Lógica Cuantitativa
 
 1. **Fusión Multi-Query y Deduplicación (`src/services/agent_graph/nodes.py`)**
-   - *Lógica (Línea 65-74):* Ejecución asíncrona de `retrieve_documents(q, tenant_id, top_k=15)` para la query original, las 3 variaciones de Multi-Query y el documento HyDE.
+   - *Lógica:* Ejecución asíncrona de `retrieve_documents(q, tenant_id, top_k=...)` para la query original, las 3 variaciones de Multi-Query y el documento HyDE. La ventana la calcula `retrieval_window`: parte de `top_k_retrieve`/`top_k_rerank` del `ChatRequest` (15/10 por defecto) y se amplía en cada reintento del ciclo.
    - *Deduplicación:* Se colapsan las listas concurrentes en una y se filtran duplicados utilizando un `set()` de Python comparando la propiedad `doc.content` exacta.
 2. **Lógica de Ruteo Condicional (`src/services/agent_graph/graph.py`)**
    - *Supervisor a Salida:* `route_supervisor` evalúa `if state.get("final_answer")` -> `END`. Si no, `researcher`.
    - *Self-Correction Loop:* La función `route_reviewer` se encarga de decidir la iteración. Su nombre se debe a que intercepta el resultado de la revisión (hecha por el generador) para rutear. 
-   - *Condición (Línea 10):* `if state.get("needs_more_info") and state.get("iterations", 0) < 2` -> `researcher`. 
+   - *Condición:* `if state.get("needs_more_info") and state.get("iterations", 0) < 2` y `not state.get("retrieval_exhausted")` -> `researcher`. Si la búsqueda ya no puede ampliarse, `END`.
    - Mapeo de validación: El extractor devuelve `StructuredAnswer.requires_more_info`. El nodo `generator_node` mapea este flag al estado como `state["needs_more_info"]`.
-   - Incremento (Línea 90, `nodes.py`): El `researcher_node` devuelve `{"iterations": state["iterations"] + 1}`. Límite iteraciones cíclicas: 2.
+   - Incremento (`nodes.py`): El `researcher_node` devuelve `{"iterations": state["iterations"] + 1, "retrieval_exhausted": ...}`. Límite iteraciones cíclicas: 2. En el reintento, `retrieval_window` amplía la ventana (15/10 → 30/15 con los valores por defecto).
 3. **Memoria a Largo Plazo (`src/services/memory.py`)**
    - *Lógica:* Extrae top 3 hechos. Usa `ORDER BY fact_embedding <=> $1::vector LIMIT 3`.
    - *Aislamiento:* Aplicado a través del RLS estableciendo `SET app.current_tenant`.

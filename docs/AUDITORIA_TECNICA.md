@@ -85,7 +85,8 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `BUG-02` | ✅ corregido | 2026-09-14 | Lista blanca de intenciones, más confianza y `requires_more_info`, en ambos endpoints. Contra servidor real: 3/8 → 8/8. Antes, *"¿Cuánto vale ethereum?"* recibía el precio de bitcoin desde caché |
 | `BUG-04` | ✅ corregido | 2026-09-14 | `00_create_app_user` → `01_init` completo; `apply_*` a `sql/migrations/`; healthcheck por TCP. Desde volumen vacío: `exit=3` → `healthy`. Catálogo idéntico al de desarrollo (77/77), RLS 7/7, app real 6/6 |
 | `BUG-06` | ✅ corregido | 2026-09-14 | `top_k` propagados hasta el investigador, con valores por defecto únicos (15/10), límites de rango y sin caché cuando difieren. Contra servidor real: 3/8 → 8/8; fuera de rango 200 → 422 |
-| Los otros 17 | ⬜ abiertos | — | — |
+| `BUG-05` | ✅ corregido | 2026-09-14 | Opción (a): cada reintento amplía la ventana (15/10 → 30/15, con tope en los máximos de la API) y no se reintenta si ampliar no puede aportar nada. Contra servidor real: 3/7 → 7/7; reintentos idénticos 3 → 0 |
+| Los otros 16 | ⬜ abiertos | — | — |
 
 ---
 
@@ -1096,6 +1097,27 @@ sed -n '61,72p' src/services/agent_graph/nodes.py   # queries sin modificar
 Más ambicioso: reinvocar `analyze_query` pidiendo variantes distintas, pasándole las ya intentadas como negativas.
 
 **(b) Desactivar el ciclo y alinear la documentación** — si no se va a implementar (a), lo honesto es `iterations < 1` (nunca reitera) y reescribir el README y `PAPER.md` §5.4 describiendo el flag `requires_more_info` como lo que es: una señal de calidad reportada al usuario, no un mecanismo de corrección.
+
+**Estado: ✅ corregido (2026-09-14), opción (a), elegida por el usuario.** `researcher_node` calcula su ventana con `retrieval_window(base_retrieve, base_rerank, iteración)`. Hay tres diferencias con el parche de arriba:
+
+- **La base son los `top_k` del cliente**, que `BUG-06` hizo efectivos, y no un 15/10 fijo. Cada reintento multiplica los candidatos por variante y deja pasar un 50 % más de documentos, redondeando hacia arriba: 15/10 → 30/15, 15/3 → 30/5, 15/1 → 30/2. El techo son los máximos de la API (`MAX_TOP_K_RETRIEVE=50`, `MAX_TOP_K_RERANK=20`, ahora constantes en `requests.py`), así que el ciclo respeta la misma cota de coste que una petición.
+- **No hay reintentos estériles.** El investigador marca `retrieval_exhausted` cuando una ventana mayor no puede cambiar el contexto: ninguna búsqueda llenó su cupo y el redactor ya recibió todos los candidatos, o la ventana siguiente es igual por los máximos. En ese caso `route_reviewer` termina aunque el redactor pida más información. Con corpus pequeños, como el de este sandbox (11 documentos por tenant), es el caso frecuente.
+- **El mensaje dice lo que ocurre** (*"Volviendo al Investigador con la búsqueda ampliada"*), y el reintento imprime la ventana que usa. README, `PAPER_PLAN.md`, `PAPER.md` y `PAPER_EN.md` describen ahora la ampliación y la nueva condición de salida.
+
+Verificado contra uvicorn real, con el grafo, el LLM y Postgres de verdad. Búsqueda, re-ranking y redactor se envolvieron solo para registrar, en cada pasada, la ventana, los documentos (con sus ID) y si el redactor pedía más información. Un `top_k_rerank` bajo provoca el reintento de forma fiable:
+
+| Escenario | Antes | Después |
+|---|---|---|
+| Sin parámetros (control positivo) | 1 pasada, 15/10 | 1 pasada, 15/10 |
+| `/chat/`, `top_k_rerank=1` | 2 pasadas **idénticas**: 15/1, mismo documento | 15/1 → **30/2**, 1 documento nuevo |
+| `/chat/stream/`, `top_k_rerank=3` | 2 pasadas **idénticas**: 15/3, mismos documentos | 15/3 → **30/5**, 2 documentos nuevos |
+| Pregunta sin respuesta en el corpus, contexto ya agotado (11 < 15 y 11 ≤ 20) | 2 pasadas idénticas | **1 pasada**: no reintenta |
+| Algún reintento repite la búsqueda anterior | 3 de 3 | 0 |
+| **Comprobaciones** | **3/7** | **7/7** |
+
+Aparte, 18 casos directos sin base de datos ni LLM: la ventana (incluidos los topes 30/15 → 50/20 y 50/20 → 50/20), las cinco ramas de `route_reviewer` y el flag de agotamiento con corpus simulados de 11 y 100 documentos. La base se devolvió a su estado inicial.
+
+**Límites de lo medido.** El reintento aporta contexto nuevo, pero no garantiza que el redactor quede satisfecho: en los dos escenarios con reintento volvió a pedir más información. Con este corpus, la ampliación de la búsqueda (15 → 30) no añadió candidatos, porque cada tenant tiene 11 documentos; los documentos nuevos salieron de ampliar el re-ranking. El efecto de la búsqueda con un corpus mayor está cubierto por los casos directos, no medido contra la base real. La alternativa más ambiciosa, reformular las consultas en el reintento, queda sin implementar.
 
 ---
 

@@ -34,3 +34,7 @@ class AgentState(TypedDict):
     # Estado cíclico
     iterations: int
     needs_more_info: bool
+    # Lo fija el investigador: True si ampliar la búsqueda no podría traer nada nuevo,
+    # porque el corpus no dio más candidatos y el redactor ya los vio todos, o porque
+    # la ventana ya está en los máximos. route_reviewer no reintenta en ese caso.
+    retrieval_exhausted: bool

@@ -11,9 +11,13 @@ def route_supervisor(state: AgentState) -> str:
 def route_reviewer(state: AgentState) -> str:
     # Si Claude indicó que requiere más info y no hemos iterado demasiado
     if state.get("needs_more_info") and state.get("iterations", 0) < 2:
-        print("🔄 [Revisor] Falta contexto. Volviendo al Investigador con instrucciones extendidas...")
-        # NOTA: En una implementación más avanzada, aquí modificaríamos 'search_queries' 
-        # para que busque algo más específico. Por ahora, solo re-itera.
+        if state.get("retrieval_exhausted"):
+            # El reintento repetiría exactamente el mismo contexto: solo añadiría coste.
+            print("⏹️ [Revisor] Falta contexto, pero ampliar la búsqueda no traería nada nuevo. Se termina.")
+            return "END"
+        # El investigador amplía la ventana de recuperación en cada reintento
+        # (retrieval_window en nodes.py).
+        print("🔄 [Revisor] Falta contexto. Volviendo al Investigador con la búsqueda ampliada...")
         return "researcher"
     return "END"
 

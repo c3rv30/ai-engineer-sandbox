@@ -108,13 +108,13 @@ El sistema distingue arquitectónicamente entre *Nodos* (funciones que ejecutan 
 #### 4.3.2. Nodo Investigador (`researcher_node`)
 - **Rol:** Es un nodo **estrictamente pragmático**. No consume tokens de LLM. Actúa como el motor I/O asíncrono para interactuar con la base de datos.
 - **Agente LLM que invoca:** Ninguno.
-- **Lógica de Ejecución:** Recibe las consultas (Query Original, Variaciones Multi-Query, Documento HyDE) y dispara consultas SQL concurrentes usando `asyncio.gather`. Deduplica los resultados mediante Hashing Sets de Python, pasa la lista limpia por el Re-ranker local (FlashRank) y adjunta el sub-grafo de GraphRAG. Finalmente, incrementa `iterations += 1`.
+- **Lógica de Ejecución:** Recibe las consultas (Query Original, Variaciones Multi-Query, Documento HyDE) y dispara consultas SQL concurrentes usando `asyncio.gather`. Deduplica los resultados mediante Hashing Sets de Python, pasa la lista limpia por el Re-ranker local (FlashRank) y adjunta el sub-grafo de GraphRAG. En cada reintento amplía la ventana de recuperación (`retrieval_window`): multiplica los candidatos por variante y deja pasar un 50 % más de documentos tras el re-ranking, con los máximos de la API como techo. Marca `retrieval_exhausted` cuando ampliarla no podría aportar nada nuevo. Finalmente, incrementa `iterations += 1`.
 
 #### 4.3.3. Nodo Generador (`generator_node`)
 - **Rol:** Sintetizador final y Revisor lógico. Compila la respuesta final para el usuario y evalúa si cuenta con suficiente contexto para responder sin alucinar.
 - **Agente LLM que invoca:** `generate_answer` (`src/services/extractor.py`).
 - **Prompt Sistémico:** *"Eres un experto respondiendo preguntas basado estrictamente en el contexto recuperado... Usa [Doc X] para citar. Contexto sobre el usuario: {user_profile}..."*
-- **Condición de Terminación / Ruteo:** El modelo produce la estructura Pydantic `StructuredAnswer`, la cual contiene un flag booleano `requires_more_info`. El nodo mapea este flag al estado como `needs_more_info`. La función interceptora de aristas (`route_reviewer`) lee este valor; si es `True` y las `iterations` son menores a 2, el flujo *retorna* al Investigador (Self-Correction); de lo contrario, transita a `END`.
+- **Condición de Terminación / Ruteo:** El modelo produce la estructura Pydantic `StructuredAnswer`, la cual contiene un flag booleano `requires_more_info`. El nodo mapea este flag al estado como `needs_more_info`. La función interceptora de aristas (`route_reviewer`) lee este valor; si es `True`, las `iterations` son menores a 2 y la búsqueda aún puede ampliarse (`retrieval_exhausted` es `False`), el flujo *retorna* al Investigador (Self-Correction); de lo contrario, transita a `END`.
 
 #### 4.3.4. Agentes Asíncronos (Background Tasks)
 Para evitar bloquear el *event loop* de FastAPI (y por ende, penalizar la latencia percibida por el usuario final), el sistema delega cargas pesadas a tareas asíncronas de "disparar y olvidar" (Fire-and-forget).

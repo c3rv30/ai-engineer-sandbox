@@ -43,7 +43,7 @@ graph TD
 
 ### 1. 🤖 Orquestación Agentic (LangGraph)
 *   **Routing Inteligente:** El flujo es gestionado por Nodos (Supervisor, Investigador, Revisor) que se comunican escribiendo en un Estado Global (`AgentState`).
-*   **Ciclos de Razonamiento:** Si el Agente Redactor detecta que el contexto recuperado es insuficiente, rechaza la generación y devuelve el control al Investigador para hacer consultas más profundas.
+*   **Ciclos de Razonamiento:** Si el Agente Redactor detecta que el contexto recuperado es insuficiente, devuelve el control al Investigador, que repite la búsqueda con una ventana más amplia: más candidatos por variante de la consulta y más documentos tras el re-ranking. Si ampliarla no puede aportar nada nuevo, el ciclo termina.
 *   **Herramientas Externas (Function Calling):** El supervisor puede desviar la consulta para invocar APIs externas de forma determinista.
 
 ### 2. 🔍 RAG Avanzado y Recuperación Multidimensional

@@ -11,7 +11,9 @@ from src.services.extractor import generate_answer, generate_answer_stream
 from src.services.tools import TOOLS_REGISTRY
 from src.models.search import SearchResult
 from src.models.structured import StructuredAnswer
-from src.models.requests import DEFAULT_TOP_K_RETRIEVE, DEFAULT_TOP_K_RERANK
+from src.models.requests import (
+    DEFAULT_TOP_K_RETRIEVE, DEFAULT_TOP_K_RERANK, MAX_TOP_K_RETRIEVE, MAX_TOP_K_RERANK,
+)
 
 async def supervisor_node(state: AgentState) -> dict:
     """
@@ -61,6 +63,18 @@ async def supervisor_node(state: AgentState) -> dict:
         "iterations": state.get("iterations", 0)
     }
 
+def retrieval_window(base_retrieve: int, base_rerank: int, iteration: int) -> tuple[int, int]:
+    """Candidatos por variante y documentos tras el re-ranking para la pasada `iteration` (0 = la primera).
+
+    Un reintento del ciclo de auto-corrección llega porque el redactor dijo que el
+    contexto no le bastaba, y repetir la misma búsqueda devolvería exactamente lo mismo
+    (BUG-05). En cada reintento se multiplican los candidatos y se deja pasar la mitad
+    más de documentos (redondeando hacia arriba), sin superar los máximos de la API.
+    """
+    retrieve_k = min(base_retrieve * (iteration + 1), MAX_TOP_K_RETRIEVE)
+    rerank_k = min(base_rerank + (base_rerank + 1) // 2 * iteration, MAX_TOP_K_RERANK)
+    return retrieve_k, rerank_k
+
 async def researcher_node(state: AgentState) -> dict:
     """
     Se encarga de buscar en Postgres Vector y GraphRAG.
@@ -68,10 +82,14 @@ async def researcher_node(state: AgentState) -> dict:
     print("🔍 [Investigador] Buscando contexto en la base de datos...")
     tenant_id = state["tenant_id"]
     queries = state["search_queries"]
-    # Los fija el cliente en el ChatRequest. Un estado construido sin ellos (fuera de la
-    # API) usa los mismos valores por defecto que el contrato.
-    top_k_retrieve = state.get("top_k_retrieve", DEFAULT_TOP_K_RETRIEVE)
-    top_k_rerank = state.get("top_k_rerank", DEFAULT_TOP_K_RERANK)
+    # La base la fija el cliente en el ChatRequest; un estado construido sin ella (fuera
+    # de la API) usa los mismos valores por defecto que el contrato.
+    base_retrieve = state.get("top_k_retrieve", DEFAULT_TOP_K_RETRIEVE)
+    base_rerank = state.get("top_k_rerank", DEFAULT_TOP_K_RERANK)
+    iteration = state.get("iterations", 0)
+    top_k_retrieve, top_k_rerank = retrieval_window(base_retrieve, base_rerank, iteration)
+    if iteration:
+        print(f"🔄 [Investigador] Reintento {iteration}: {top_k_retrieve} candidatos por variante, {top_k_rerank} documentos.")
 
     # 1. Recuperación Vectorial Concurrente
     retrieval_tasks = [retrieve_documents(q, tenant_id, top_k=top_k_retrieve) for q in queries]
@@ -99,7 +117,18 @@ async def researcher_node(state: AgentState) -> dict:
             score=1.0
         ))
         
-    return {"documents": best_results, "iterations": state["iterations"] + 1}
+    # Reintentar solo tiene sentido si una ventana más amplia puede cambiar el contexto.
+    # No puede si ninguna búsqueda llenó su cupo (el corpus no tiene más candidatos) y el
+    # redactor ya los recibió todos, ni si la ventana siguiente es igual por los máximos.
+    corpus_exhausted = (all(len(r) < top_k_retrieve for r in results_lists)
+                        and len(unique_candidates) <= top_k_rerank)
+    window_saturated = retrieval_window(base_retrieve, base_rerank, iteration + 1) == (top_k_retrieve, top_k_rerank)
+
+    return {
+        "documents": best_results,
+        "iterations": state["iterations"] + 1,
+        "retrieval_exhausted": corpus_exhausted or window_saturated,
+    }
 
 async def generator_node(state: AgentState) -> dict:
     """
