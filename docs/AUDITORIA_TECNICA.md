@@ -81,7 +81,8 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `DOC-01` | ✅ corregido | 2026-09-13 | Streaming token-a-token recuperado por el canal `custom` de LangGraph: 4 → 244 eventos SSE, primer texto 13,5 s → 9,6 s, medido contra servidor real |
 | `BUG-09` | ✅ corregido | 2026-09-13 | Hallazgo nuevo: el stream no devolvía respuesta para saludos, fuera de alcance ni herramientas. Corregido con `DOC-01` |
 | `SEC-04` | ✅ corregido | 2026-09-14 | Temporal con nombre aleatorio; el original solo como metadato. Control negativo contra uvicorn real: 1/9 → 9/9 propiedades; ingesta real 8/8 |
-| Los otros 21 | ⬜ abiertos | — | — |
+| `SEC-03` | ✅ corregido | 2026-09-14 | `ILIKE ANY($1::text[])` parametrizado. Con tokenizador permisivo, la versión vieja cae ante los tres payloads, incluida una lectura entre tenants; la nueva, ante ninguno. Mismos resultados en 16 consultas reales |
+| Los otros 20 | ⬜ abiertos | — | — |
 
 ---
 
@@ -479,6 +480,22 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX kg_source_trgm_idx ON knowledge_graph USING GIN (source_node gin_trgm_ops);
 CREATE INDEX kg_target_trgm_idx ON knowledge_graph USING GIN (target_node gin_trgm_ops);
 ```
+
+**Estado: ✅ corregido (2026-09-14).** Aplicado el parche de arriba. Las palabras de la consulta viajan como parámetro y la seguridad deja de depender del regex. `%` y `_` dentro de una palabra siguen actuando como comodines de `ILIKE`, igual que antes. Escaparlos no aporta seguridad, porque un parámetro no puede alterar el SQL, y cambiaría resultados sobre datos reales: 13 tripletas de la base tienen nodos con `_` (`api_gateway`, `buenas_prácticas_de_desarrollo`…). El índice trigram no se aplica aquí: es rendimiento, no seguridad, y requiere tocar los scripts SQL, lo que conviene hacer junto con `BUG-04`.
+
+Verificado ejecutando la versión anterior y la nueva contra Postgres real, conectadas como `app_user` (sin `SUPERUSER` ni `BYPASSRLS`, con `FORCE ROW LEVEL SECURITY`).
+
+*Control negativo.* Se sustituyó el tokenizador por uno permisivo, el escenario que este hallazgo anticipa:
+
+| Payload | Antes | Después |
+|---|---|---|
+| Tautología (`…%' or true or source_node ilike '%…`) | 10 filas sin coincidir ninguna palabra | 0 filas |
+| Apóstrofo legítimo (`o'brien`) | `PostgresSyntaxError`: el investigador cae | 0 filas |
+| Lectura entre tenants, como un tenant sin tripletas | **10 tripletas del otro tenant** | 0 filas |
+
+**La tercera fila corrige la valoración de este hallazgo.** Se daba por supuesto que una inyección aquí quedaba contenida por RLS. No es así. El payload añade un `UNION` cuyo `FROM` ejecuta `set_config('app.current_tenant', '<otro tenant>', false)` antes de recorrer `knowledge_graph`, y la política RLS evalúa `current_setting` fila a fila, así que lee ya el tenant reescrito. `app_user` puede cambiar la variable de la que depende su propio aislamiento. Por eso **cualquier** inyección SQL en el sistema anula el aislamiento multi-tenant, no solo esta. Queda anotado como observación, pendiente de catalogar.
+
+*Equivalencia.* Con el tokenizador real, 16 consultas sobre los datos del tenant con grafo: mismo conjunto completo de coincidencias sin `LIMIT` (0 a 21 filas) y misma salida de `retrieve_subgraph` en las 16. Otras tres comprobaciones: el tenant sin tripletas no ve nada con ninguna consulta, `researcher_node` real antepone el subgrafo (10 tripletas) al contexto, y la base queda sin cambios, porque la prueba solo lee.
 
 ---
 

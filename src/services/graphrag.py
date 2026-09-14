@@ -75,19 +75,19 @@ async def retrieve_subgraph(tenant_id: uuid.UUID, query: str) -> str:
             return ""
             
         # Buscar relaciones donde el origen o destino coincida con alguna palabra de la pregunta
-        # Usamos ILIKE para coincidencia parcial
-        conditions = []
-        for word in words:
-            conditions.append(f"source_node ILIKE '%{word}%' OR target_node ILIKE '%{word}%'")
-            
-        sql_query = f"""
+        # Usamos ILIKE para coincidencia parcial. Las palabras vienen de texto del usuario,
+        # así que viajan como parámetro y nunca dentro del SQL: la seguridad de la consulta
+        # no puede depender de lo que deje pasar el regex de arriba.
+        patterns = [f"%{word}%" for word in words]
+        sql_query = """
         SELECT source_node, relation, target_node
         FROM knowledge_graph
-        WHERE {' OR '.join(conditions)}
+        WHERE source_node ILIKE ANY($1::text[])
+           OR target_node ILIKE ANY($1::text[])
         LIMIT 10
         """
-        
-        rows = await conn.fetch(sql_query)
+
+        rows = await conn.fetch(sql_query, patterns)
         if not rows:
             return ""
             
