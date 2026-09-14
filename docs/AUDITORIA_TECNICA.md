@@ -84,7 +84,8 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `SEC-03` | ✅ corregido | 2026-09-14 | `ILIKE ANY($1::text[])` parametrizado. Con tokenizador permisivo, la versión vieja cae ante los tres payloads, incluida una lectura entre tenants; la nueva, ante ninguno. Mismos resultados en 16 consultas reales |
 | `BUG-02` | ✅ corregido | 2026-09-14 | Lista blanca de intenciones, más confianza y `requires_more_info`, en ambos endpoints. Contra servidor real: 3/8 → 8/8. Antes, *"¿Cuánto vale ethereum?"* recibía el precio de bitcoin desde caché |
 | `BUG-04` | ✅ corregido | 2026-09-14 | `00_create_app_user` → `01_init` completo; `apply_*` a `sql/migrations/`; healthcheck por TCP. Desde volumen vacío: `exit=3` → `healthy`. Catálogo idéntico al de desarrollo (77/77), RLS 7/7, app real 6/6 |
-| Los otros 18 | ⬜ abiertos | — | — |
+| `BUG-06` | ✅ corregido | 2026-09-14 | `top_k` propagados hasta el investigador, con valores por defecto únicos (15/10), límites de rango y sin caché cuando difieren. Contra servidor real: 3/8 → 8/8; fuera de rango 200 → 422 |
+| Los otros 17 | ⬜ abiertos | — | — |
 
 ---
 
@@ -1157,6 +1158,30 @@ grep -rn "top_k_retrieve\|top_k_rerank" src/
 Alinear el default de `top_k_rerank` a 10 (o justificar 7). Si se implementa `BUG-05` opción (a), estos valores pasan a ser la base sobre la que se amplía en cada iteración.
 
 Alternativa: eliminarlos del `ChatRequest` si no se quieren exponer, y corregir la nota de `TROUBLESHOOTING.md` §2.
+
+**Estado: ✅ corregido (2026-09-14).** Se eligió propagarlos, como propone el parche, porque `TROUBLESHOOTING.md` §2 los presenta como la palanca con la que se resolvió un fallo real. Van por el estado hasta `researcher_node`, en ambos endpoints. Hay cuatro ajustes:
+
+- **Un solo sitio para los valores por defecto.** `DEFAULT_TOP_K_RETRIEVE = 15` y `DEFAULT_TOP_K_RERANK = 10` viven en `requests.py`, y los importan el nodo y el router. La divergencia entre el 7 del contrato y el 10 del código era el propio defecto. Se toma 10 porque es lo que hacía la aplicación y lo que documenta `PAPER_PLAN.md`, de modo que un cliente que no envía parámetros no nota ningún cambio.
+- **Límites de rango:** `top_k_retrieve` entre 1 y 50, y `top_k_rerank` entre 1 y 20. Sin ellos, al propagar, un 0 o un negativo llegaría a un `LIMIT` de Postgres, y un valor enorme multiplicaría el coste del cross-encoder, porque la búsqueda se repite por cada variante de la consulta.
+- **Caché.** `semantic_cache` se indexa solo por la pregunta, así que una respuesta obtenida con otros `top_k` no es intercambiable con la de los valores por defecto. Las peticiones que los cambian no leen ni escriben caché. Sin esto, la palanca seguiría sin efecto en cuanto la pregunta estuviera cacheada.
+- **Nota añadida en `TROUBLESHOOTING.md` §2.**
+
+Verificado contra uvicorn real, con el grafo, el LLM y Postgres de verdad. `retrieve_documents` y `rerank_documents` se envolvieron solo para registrar el `top_k` que reciben y cuántos documentos devuelven. El tenant de la prueba tiene 11 documentos.
+
+| Escenario | Antes | Después |
+|---|---|---|
+| Sin parámetros (control positivo) | 15 / 10 | 15 / 10 |
+| `top_k_retrieve=2`, `top_k_rerank=3` | 15 / 10: ignorados | 2 candidatos por variante / 3 documentos |
+| `top_k_rerank=1` | 10 documentos | 1 documento |
+| `/chat/stream/` con `top_k_rerank=2` | 10 documentos | 2 documentos |
+| `top_k_rerank=0`, `top_k_retrieve=-1`, `1000` | HTTP 200: descartados en silencio | HTTP 422 |
+| Pregunta cacheada con `top_k_rerank=3` | Servida desde caché | Ejecuta el grafo con 3 y no escribe caché |
+| Pregunta cacheada sin parámetros | Cache hit | Cache hit |
+| **Comprobaciones** | **3/8** | **8/8** |
+
+Aparte, 12 casos directos: los bordes exactos de validación (1/50/51 y 1/20/21), los valores por defecto (15, 10) y un estado de grafo sin las claves, que cae en 15/10. La base se devolvió a su estado inicial; el evaluador llegó a escribir dos filas en segundo plano, que también se purgaron.
+
+**Evidencia colateral sobre `BUG-05`.** Con 1 a 3 documentos, el redactor pidió más información y el ciclo de auto-corrección hizo una segunda pasada del investigador **con los mismos `top_k`**: 8 búsquedas y 2 re-rankings idénticos. El reintento no amplía nada.
 
 ---
 

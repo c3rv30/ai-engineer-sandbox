@@ -30,6 +30,7 @@ A pesar de que el sistema enrutaba bien la pregunta, el LLM respondía: *"No ten
 **Solución:**
 1. **Deduplicación en memoria:** En `src/api/routers/chat.py`, se aumentó la búsqueda inicial a `15` fragmentos, y se inyectó un algoritmo iterativo que elimina fragmentos idénticos (`content not in seen`) antes de pasarlos al Re-ranker.
 2. **Ampliación del Context Window:** Se modificó `src/models/requests.py` para aumentar `top_k_rerank` de 3 a 7. Los modelos modernos soportan ventanas de contexto gigantes, por lo que es preferible pecar de exceso de contexto que de falta del mismo.
+   *Nota (2026-09-14): tras la migración a LangGraph este parámetro dejó de aplicarse; el investigador usaba un 10 fijo. Hoy el valor por defecto es 10 y `researcher_node` respeta lo que envíe el cliente. Ver `BUG-06` en [`AUDITORIA_TECNICA.md`](AUDITORIA_TECNICA.md).*
 3. **Limpieza de DB:** Se ejecutó un `DELETE FROM documents;` para purgar la saturación de clones.
 
 ---

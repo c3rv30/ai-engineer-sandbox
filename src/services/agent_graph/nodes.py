@@ -11,6 +11,7 @@ from src.services.extractor import generate_answer, generate_answer_stream
 from src.services.tools import TOOLS_REGISTRY
 from src.models.search import SearchResult
 from src.models.structured import StructuredAnswer
+from src.models.requests import DEFAULT_TOP_K_RETRIEVE, DEFAULT_TOP_K_RERANK
 
 async def supervisor_node(state: AgentState) -> dict:
     """
@@ -67,9 +68,13 @@ async def researcher_node(state: AgentState) -> dict:
     print("🔍 [Investigador] Buscando contexto en la base de datos...")
     tenant_id = state["tenant_id"]
     queries = state["search_queries"]
-    
+    # Los fija el cliente en el ChatRequest. Un estado construido sin ellos (fuera de la
+    # API) usa los mismos valores por defecto que el contrato.
+    top_k_retrieve = state.get("top_k_retrieve", DEFAULT_TOP_K_RETRIEVE)
+    top_k_rerank = state.get("top_k_rerank", DEFAULT_TOP_K_RERANK)
+
     # 1. Recuperación Vectorial Concurrente
-    retrieval_tasks = [retrieve_documents(q, tenant_id, top_k=15) for q in queries]
+    retrieval_tasks = [retrieve_documents(q, tenant_id, top_k=top_k_retrieve) for q in queries]
     results_lists = await asyncio.gather(*retrieval_tasks)
     vector_candidates = [doc for sublist in results_lists for doc in sublist]
     
@@ -82,7 +87,7 @@ async def researcher_node(state: AgentState) -> dict:
             unique_candidates.append(doc)
             
     # 2. Re-ranking
-    best_results = await rerank_documents(state["query"], unique_candidates, top_k=10)
+    best_results = await rerank_documents(state["query"], unique_candidates, top_k=top_k_rerank)
     
     # 3. GraphRAG
     graph_context = await retrieve_subgraph(tenant_id, state["query"])

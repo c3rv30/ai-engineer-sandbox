@@ -18,7 +18,11 @@ class AgentState(TypedDict):
     # Turnos previos de la conversación ([{'role','content'}, ...]). Lo consume el
     # supervisor para resolver correferencias ("¿y en qué años?").
     history: List[Dict[str, str]]
-    
+    # Parámetros de recuperación del ChatRequest. El investigador los aplica en cada
+    # pasada, también en las que añade el ciclo de auto-corrección.
+    top_k_retrieve: int
+    top_k_rerank: int
+
     # Decisiones del supervisor
     intent_type: str
     
