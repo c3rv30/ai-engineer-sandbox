@@ -43,7 +43,9 @@ El valor de esta auditoría no está en cuestionar el diseño sino en registrar 
 | Higiene del repositorio | — | — | 2 | 2 | **4** |
 | **Total** | **2** | **11** | **12** | **3** | **28** |
 
-> **Posterior a la foto.** `BUG-09` (🟠) se encontró el 2026-09-13 al reescribir el bucle de streaming para `DOC-01`, y está en el índice y en la tabla de remediación. No se suma a este recuento, que es el estado del 2026-09-10.
+> **Posteriores a la foto.** No se suman a este recuento, que es el estado del 2026-09-10. Todos aparecieron al verificar correcciones contra el sistema real y están en el índice (§2) y en la tabla de remediación:
+> - `BUG-09` (🟠), el 2026-09-13, al reescribir el bucle de streaming para `DOC-01`.
+> - `SEC-05` (🟠), `SEC-06` (🟡), `BUG-10` (🟠), `HYG-05` (🟡) y `HYG-06` (⚪), el 2026-09-14.
 
 ### Criterios de severidad
 
@@ -68,7 +70,7 @@ El valor de esta auditoría no está en cuestionar el diseño sino en registrar 
 
 ### Estado de remediación
 
-Este documento es una foto del estado en la fecha de cabecera. Lo corregido desde entonces:
+Este documento es una foto del estado en la fecha de cabecera. Los inventarios, la traza y los anexos (§3, §9 y §11–§14) describen esa foto y no se reescriben con cada corrección: algunas de sus filas ya no son ciertas, como la de `PAPER.md` §5.4 sobre `BUG-05`. **El estado vigente de cada hallazgo es el de esta tabla y el de su línea `Estado:`.** Lo corregido desde entonces:
 
 | Hallazgo | Estado | Fecha | Verificación |
 |---|:---:|:---:|---|
@@ -86,7 +88,23 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `BUG-04` | ✅ corregido | 2026-09-14 | `00_create_app_user` → `01_init` completo; `apply_*` a `sql/migrations/`; healthcheck por TCP. Desde volumen vacío: `exit=3` → `healthy`. Catálogo idéntico al de desarrollo (77/77), RLS 7/7, app real 6/6 |
 | `BUG-06` | ✅ corregido | 2026-09-14 | `top_k` propagados hasta el investigador, con valores por defecto únicos (15/10), límites de rango y sin caché cuando difieren. Contra servidor real: 3/8 → 8/8; fuera de rango 200 → 422 |
 | `BUG-05` | ✅ corregido | 2026-09-14 | Opción (a): cada reintento amplía la ventana (15/10 → 30/15, con tope en los máximos de la API) y no se reintenta si ampliar no puede aportar nada. Contra servidor real: 3/7 → 7/7; reintentos idénticos 3 → 0 |
-| Los otros 16 | ⬜ abiertos | — | — |
+| Los otros 16 de la foto | ⬜ abiertos | — | — |
+| `SEC-05`, `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
+
+**Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
+
+| # | Qué | Origen | Propuesta |
+|---|---|---|---|
+| D-01 | Las 22 filas de `documents` guardan en `metadata.source` la ruta temporal del servidor (`/var/folders/…/T/bbobadilla_resume.pdf`) | `SEC-04` | Dejar solo el nombre de archivo: `UPDATE documents SET metadata = jsonb_set(metadata, '{source}', to_jsonb(regexp_replace(metadata->>'source', '^.*/', ''))) WHERE metadata->>'source' LIKE '/%';` como `postgres` |
+| D-02 | Una fila de `semantic_cache` (`7f55b002…`, `requires_more_info=true`, confianza 0,75) que la política de `BUG-02` no guardaría y que se sigue sirviendo | `BUG-02` | Borrarla |
+
+**Correcciones a la foto.** Al verificar contra el sistema real, algunas afirmaciones de este documento resultaron incompletas o incorrectas. El detalle está en la línea de estado de cada hallazgo:
+
+- **`SEC-03`**: se daba por hecho que RLS contenía una inyección en esa consulta. No la contiene: `app_user` puede reescribir su tenant desde la propia sentencia (catalogado como `SEC-05`).
+- **`SEC-04`**: el path traversal no solo sobrescribe el destino; el `finally` lo borra. Además, el parche propuesto, aplicado solo, habría perdido el nombre original de cada documento.
+- **`BUG-02`**: el caché no solo servía datos viejos, sino datos de otra consulta (el precio de bitcoin a quien preguntaba por ethereum). `out_of_scope` no es inocuo. Desde la corrección de `BUG-09`, `/chat/stream/` también cacheaba herramientas.
+- **`BUG-04`**: `FORCE ROW LEVEL SECURITY` no protege el DSN de `postgres` de `.env.example`, porque un superusuario elude RLS con o sin `FORCE`.
+- **`PERF-04`**: el evaluador falla de forma intermitente, no siempre. El mensaje del commit `d198be1` (`BUG-02`) dice lo contrario y es incorrecto.
 
 ---
 
@@ -123,6 +141,13 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `HYG-02` | 🟡 | Código muerto versionado en la raíz | raíz del repo | 5 |
 | `HYG-03` | ⚪ | `.gitignore` incompleto | `.gitignore` | 5 |
 | `HYG-04` | ⚪ | `datetime.utcnow()` deprecado | `src/api/auth.py:41,43` | 5 |
+| `SEC-05` | 🟠 | `app_user` puede reescribir su propio contexto de tenant | políticas RLS de `sql/01_init.sql` | 3 |
+| `SEC-06` | 🟡 | Las respuestas de error devuelven el texto de la excepción | `src/api/routers/ingest.py:39` | 1 |
+| `BUG-10` | 🟠 | El caché semántico ignora el historial | `src/services/cache.py:17` | 2 |
+| `HYG-05` | 🟡 | Tres servicios crean su cliente de Anthropic antes de cargar `.env` | `src/services/router.py:10` | 5 |
+| `HYG-06` | ⚪ | La base de datos no se reinicia con Docker | `docker-compose.yml` | 5 |
+
+Las cinco últimas filas son posteriores a la foto (2026-09-14) y no entran en el recuento de §1.
 
 ---
 
@@ -497,7 +522,7 @@ Verificado ejecutando la versión anterior y la nueva contra Postgres real, cone
 | Apóstrofo legítimo (`o'brien`) | `PostgresSyntaxError`: el investigador cae | 0 filas |
 | Lectura entre tenants, como un tenant sin tripletas | **10 tripletas del otro tenant** | 0 filas |
 
-**La tercera fila corrige la valoración de este hallazgo.** Se daba por supuesto que una inyección aquí quedaba contenida por RLS. No es así. El payload añade un `UNION` cuyo `FROM` ejecuta `set_config('app.current_tenant', '<otro tenant>', false)` antes de recorrer `knowledge_graph`, y la política RLS evalúa `current_setting` fila a fila, así que lee ya el tenant reescrito. `app_user` puede cambiar la variable de la que depende su propio aislamiento. Por eso **cualquier** inyección SQL en el sistema anula el aislamiento multi-tenant, no solo esta. Queda anotado como observación, pendiente de catalogar.
+**La tercera fila corrige la valoración de este hallazgo.** Se daba por supuesto que una inyección aquí quedaba contenida por RLS. No es así. El payload añade un `UNION` cuyo `FROM` ejecuta `set_config('app.current_tenant', '<otro tenant>', false)` antes de recorrer `knowledge_graph`, y la política RLS evalúa `current_setting` fila a fila, así que lee ya el tenant reescrito. `app_user` puede cambiar la variable de la que depende su propio aislamiento. Por eso **cualquier** inyección SQL en el sistema anula el aislamiento multi-tenant, no solo esta. Catalogado como `SEC-05`.
 
 *Equivalencia.* Con el tokenizador real, 16 consultas sobre los datos del tenant con grafo: mismo conjunto completo de coincidencias sin `LIMIT` (0 a 21 filas) y misma salida de `retrieve_subgraph` en las 16. Otras tres comprobaciones: el tenant sin tripletas no ve nada con ninguna consulta, `researcher_node` real antepone el subgrafo (10 tripletas) al contexto, y la base queda sin cambios, porque la prueba solo lee.
 
@@ -585,7 +610,85 @@ En la carrera, el doble espera 0,5 s antes de leer para que la ventana no depend
 
 Ingesta real (Claude y Postgres, sin dobles) de un `.txt` y un `.png` subidos como `../../intruso/<nombre>`: 8/8. `metadata.source` y la etiqueta `[Imagen …]` llevan el nombre original, las filas quedan bajo el tenant del token y GraphRAG extrae sus tripletas. La base se devolvió a su estado inicial.
 
-Queda fuera de este hallazgo: el `except` del endpoint devuelve `detail=str(e)`, y en la prueba de carrera ese 500 entregó al cliente la ruta interna del servidor.
+Queda fuera de este hallazgo: el `except` del endpoint devuelve `detail=str(e)`, y en la prueba de carrera ese 500 entregó al cliente la ruta interna del servidor. Catalogado como `SEC-06`.
+
+---
+
+### `SEC-05` 🟠 `app_user` puede reescribir su propio contexto de tenant
+
+> Posterior a la foto: encontrado el 2026-09-14 al verificar `SEC-03`.
+
+**Ubicación.** Las cinco políticas RLS de `sql/01_init.sql`, que filtran por `current_setting('app.current_tenant')`, y el rol `app_user` de `sql/00_create_app_user.sql`, con el que conecta la aplicación.
+
+**Análisis.** El aislamiento multi-tenant depende de una variable de sesión que fija la aplicación antes de cada consulta. El mismo rol que ejecuta las consultas puede cambiarla: `set_config()` es una función SQL corriente, y PostgreSQL no ofrece forma de impedir que un rol fije una variable personalizada (`app.*`). Una sentencia inyectada puede, por tanto, reescribir el tenant a mitad de ejecución y leer los datos de otro.
+
+RLS deja así de ser una segunda barrera: solo aísla mientras no haya inyección SQL. Es la premisa que `SEC-03` daba por buena, y es falsa.
+
+**Evidencia.** Contra Postgres real, conectado como `app_user` (sin `SUPERUSER` ni `BYPASSRLS` y con `FORCE ROW LEVEL SECURITY`), se ejecutó la versión anterior de `retrieve_subgraph` con un tokenizador que dejaba pasar comillas. La conexión era la de un tenant sin tripletas, y la palabra inyectada fue:
+
+```
+zzqx%' or true union select source_node, relation, target_node from (select set_config('app.current_tenant', '11111111-1111-1111-1111-111111111111', false)) s, knowledge_graph --
+```
+
+Devolvió **10 tripletas del otro tenant**. El `FROM` de la segunda rama ejecuta `set_config` antes de recorrer `knowledge_graph`, y la política evalúa `current_setting` fila a fila, así que ya lee el tenant reescrito. Con el código corregido, el mismo payload devuelve 0 filas.
+
+**Por qué 🟠 y no 🔴.** Hoy no hay vector de entrada. `SEC-02` y `SEC-03` cerraron las dos inyecciones conocidas, y las demás consultas usan parámetros. Es una defensa en profundidad ausente, no una vulnerabilidad explotable ahora; pero convierte cualquier inyección futura en fuga entre tenants.
+
+**Reproducción.** La sentencia equivalente a la verificada, como `app_user`:
+
+```sql
+SELECT set_config('app.current_tenant', '00000000-0000-0000-0000-000000000000', false);
+SELECT count(*) FROM knowledge_graph;                  -- 0: el tenant no tiene tripletas
+SELECT source_node, relation, target_node FROM knowledge_graph WHERE source_node ILIKE '%zzqx%' OR true
+UNION SELECT source_node, relation, target_node
+FROM (SELECT set_config('app.current_tenant', '11111111-1111-1111-1111-111111111111', false)) s, knowledge_graph
+LIMIT 10;                                              -- filas del otro tenant
+```
+
+**Parche.** Requiere una decisión de diseño; no hay una línea que lo arregle.
+
+1. **Contexto firmado.** La aplicación fija el tenant junto a una firma HMAC. Las políticas llaman a una función `SECURITY DEFINER` que verifica la firma con una clave guardada en una tabla que `app_user` no puede leer. Una inyección puede cambiar el tenant, pero no firmarlo.
+2. **Un rol por tenant.** Las políticas usan `current_user`, y las credenciales de cada rol no están al alcance de SQL. Obliga a un pool por rol. Un `SET ROLE` desde un rol base miembro de todos no sirve, porque también está al alcance de una inyección.
+3. **Cero SQL dinámico como regla comprobada.** Un test o linter que falle ante interpolación en `execute`/`fetch`. No corrige el diseño; reduce la probabilidad de que aparezca un vector.
+
+Conviene decidirlo junto a `PERF-01`: los dos cambian cómo recibe cada conexión su tenant (`set_config` local a una transacción).
+
+---
+
+### `SEC-06` 🟡 Las respuestas de error devuelven el texto de la excepción
+
+> Posterior a la foto: encontrado el 2026-09-14 al verificar `SEC-04` y `BUG-02`.
+
+**Ubicación.** Tres puntos:
+
+| Archivo:línea | Forma |
+|---|---|
+| `src/api/routers/ingest.py:39` | `raise HTTPException(status_code=500, detail=str(e))` |
+| `src/api/routers/chat.py:96` | `raise HTTPException(status_code=500, detail=str(e))` |
+| `src/api/routers/chat.py:182` | `yield f"data: {json.dumps({'error': str(e)})}\n\n"` |
+
+**Análisis.** Cualquier excepción interna llega literal al cliente: rutas del sistema de archivos del servidor, mensajes de Postgres o detalles de configuración del SDK de Anthropic. Da información útil para preparar un ataque. Requiere estar autenticado.
+
+**Evidencia.**
+- Verificando `SEC-04`, el 500 de `/ingest/` devolvió `{"detail": "/var/folders/v2/n7jcjy_11cscqrgkctpn931c0000gn/T/cv.txt"}`.
+- Verificando `BUG-02`, con el cliente de Anthropic sin clave, `/chat/stream/` entregó *"Could not resolve authentication method. Expected either api_key or auth_token to be set…"* en el evento de error.
+
+**Reproducción.**
+
+```bash
+grep -rn "str(e)" src/api      # ingest.py:39, chat.py:96, chat.py:182
+```
+
+**Parche.** Registrar la excepción en el servidor y devolver un mensaje genérico con un identificador para correlacionarlo:
+
+```python
+except Exception:
+    error_id = uuid.uuid4().hex[:8]
+    logger.exception("Fallo en /ingest/ [%s]", error_id)
+    raise HTTPException(status_code=500, detail=f"Error interno ({error_id})")
+```
+
+Los `HTTPException` con 400 o 422 son mensajes pensados para el cliente y se quedan igual. En `chat_endpoint`, el `except Exception` también captura y reenvuelve el `HTTPException` que el propio bloque lanza cuando el grafo no devuelve respuesta. Conviene dejar pasar `HTTPException` antes del caso genérico.
 
 ---
 
@@ -786,7 +889,7 @@ Verificado contra uvicorn real, con el grafo, el LLM y Postgres de verdad, como 
 
 Aparte, 11 casos límite de `is_cacheable` que el LLM no produce a voluntad: `requires_more_info=True`, confianza 0,49 / 0,5 / `None`, intención con otra capitalización, vacía o `None`. Todos correctos. La base se devolvió a su estado inicial, esperando a que terminaran los background tasks.
 
-**Pendiente.** Una fila de la base auditada no pasaría la política (`requires_more_info=true`, confianza 0,75) y se sigue sirviendo. El caché tampoco tiene en cuenta el historial: el texto de una pregunta de seguimiento (*"¿Y en qué años?"*) no basta como clave, porque su respuesta depende de la conversación.
+**Pendiente.** Una fila de la base auditada no pasaría la política (`requires_more_info=true`, confianza 0,75) y se sigue sirviendo: es la decisión de datos D-02 de la tabla de remediación. El caché tampoco tiene en cuenta el historial, porque el texto de una pregunta de seguimiento (*"¿Y en qué años?"*) no basta como clave: catalogado como `BUG-10`.
 
 ---
 
@@ -1428,6 +1531,39 @@ if state_update and state_update.get("final_answer"):
 
 ---
 
+### `BUG-10` 🟠 El caché semántico ignora el historial
+
+> Posterior a la foto: detectado el 2026-09-14 al corregir `BUG-02`. **Verificado leyendo el código; no se ha reproducido de extremo a extremo.**
+
+**Ubicación.** `src/services/cache.py:17` (`check_semantic_cache(tenant_id, query, threshold)`) y `:46` (`save_semantic_cache(tenant_id, query, response_dict)`). Las cuatro llamadas están en `src/api/routers/chat.py:52`, `:86`, `:108` y `:175`.
+
+**Análisis.** Desde la corrección de `BUG-03`, la respuesta depende del historial: *"¿Y en qué años?"* se resuelve contra el turno anterior, tanto en el supervisor como en el redactor. Pero el caché se consulta y se escribe solo con el texto de la pregunta. Si dos conversaciones del mismo tenant acaban en el mismo seguimiento, comparten entrada de caché: la segunda recibe la respuesta de la primera, sobre otro referente.
+
+Las preguntas de seguimiento son cortas y genéricas, justo las que más colisionan. Si el texto es idéntico, la similitud es 1,0. Dentro de un tenant, además, un usuario puede recibir una respuesta construida a partir de la conversación de otro.
+
+`BUG-02` y `BUG-06` restringieron qué se cachea (intención, confianza, `top_k`), pero ninguno de los dos considera el historial.
+
+**Escenario.**
+1. Conversación A: *"¿Dónde trabajó en 2024?"* → Betterfly. *"¿Y en qué años?"* → se responde sobre Betterfly y se cachea.
+2. Conversación B: *"¿Qué hizo en Itaú?"* → … *"¿Y en qué años?"* → cache hit con similitud 1,0: recibe los años de Betterfly.
+
+**Reproducción.**
+
+```bash
+grep -n "def check_semantic_cache\|def save_semantic_cache" src/services/cache.py   # no reciben historial
+grep -n "semantic_cache(" src/api/routers/chat.py                                    # solo request.query
+```
+
+**Parche.** Lo mínimo es no leer ni escribir caché cuando la petición trae historial, igual que con `top_k` propios:
+
+```python
+use_cache = uses_default_retrieval(request) and not request.history
+```
+
+La alternativa conserva el caché para los seguimientos: indexarlo por las `search_queries` que el supervisor ya resolvió, que llevan el referente explícito. Obliga a consultar el caché después del supervisor, no antes, y cuesta una llamada al LLM por petición cacheada.
+
+---
+
 ## 6. Rendimiento
 
 ### `PERF-01` 🟠 Sin connection pool: ~11 conexiones por consulta
@@ -1732,6 +1868,16 @@ grep -n "max_tokens" src/services/*.py
 Combinar con el parche de `DOC-02` (añadir `ge`/`le` a los tres scores), que corrige el otro modo de fallo silencioso del mismo módulo.
 
 **Recomendación transversal.** Tres subsistemas absorben excepciones sin dejar rastro estructurado: `evaluator.py:86`, `memory.py:63` y `graphrag.py:42`. Los tres son background o best-effort, así que no deben propagar — pero deberían registrar con el módulo `logging` y una métrica de contador, no con `print`. Hoy, si el evaluador dejara de funcionar por completo, nada lo indicaría salvo la ausencia de filas nuevas en una tabla que nadie consulta.
+
+**Observación medida (2026-09-14).** Arrancando el servidor con stdout sin búfer, se vio el error que el `print` de la línea 86 hacía invisible: *"The output is incomplete due to a max_tokens length limit"*. El diagnóstico queda confirmado, pero el fallo es **intermitente**, no sistemático. Depende de lo larga que salga la respuesta del juez, no del tamaño del corpus:
+
+| Verificación | Contexto del juez | Resultado |
+|---|---|---|
+| `BUG-02` | 10 documentos del corpus real | Falló por `max_tokens` |
+| `BUG-04` | 1 documento (base nueva) | Guardó la evaluación |
+| `BUG-06`, `BUG-05` | Hasta 10 documentos del corpus real | Guardó evaluaciones en varias ejecuciones |
+
+La base de desarrollo no tiene ninguna evaluación. El mensaje del commit `d198be1` (`BUG-02`) afirma que el evaluador falla siempre; es incorrecto. Para las pruebas, conviene contar con que puede aparecer una fila en `rag_evaluations` después de responder.
 
 ---
 
@@ -2396,6 +2542,55 @@ grep -n "utcnow" src/api/auth.py    # 41, 43
 
 ---
 
+### `HYG-05` 🟡 Tres servicios crean su cliente de Anthropic antes de cargar `.env`
+
+> Posterior a la foto: encontrado el 2026-09-14 al verificar `BUG-02`. La nota de §3.3 lo señalaba solo para `evaluator.py` y sin catalogarlo.
+
+**Ubicación.** Al importarse, sin haber llamado a `load_dotenv()`:
+
+| Archivo:línea | Qué lee del entorno |
+|---|---|
+| `src/services/router.py:10` | `ANTHROPIC_API_KEY` |
+| `src/services/extractor.py:13` | `ANTHROPIC_API_KEY` |
+| `src/services/evaluator.py:12` | `ANTHROPIC_API_KEY` y, en la l. 11, `DATABASE_URL` |
+
+**Análisis.** Funcionan solo porque `src/api/main.py` importa antes módulos que sí cargan `.env` (`auth.py`, `cache.py`, `memory.py`…). Cualquier punto de entrada que importe primero el grafo o estos servicios crea los clientes sin clave: un script, un test, un worker. Y el fallo no aparece al importar, sino en la primera llamada al LLM. `evaluator.py`, además, caería al DSN por defecto.
+
+**Evidencia.** Verificando `BUG-02`, un lanzador que importaba `src.services.agent_graph.nodes` antes que `src.api.main` hizo fallar las 11 peticiones con *"Could not resolve authentication method. Expected either api_key or auth_token to be set"*. Cargar `.env` antes de cualquier import lo resolvió.
+
+**Reproducción.**
+
+```bash
+for f in src/services/*.py; do
+  grep -q "AsyncAnthropic(" "$f" && ! grep -q "load_dotenv()" "$f" && echo "$f"
+done
+# src/services/evaluator.py, src/services/extractor.py, src/services/router.py
+```
+
+**Parche.** Un único `src/config.py` que llame a `load_dotenv()` y exponga las variables, importado por todos los servicios antes de leer el entorno. Otra opción es crear los clientes de forma perezosa en la primera llamada. Encaja con el `ANTHROPIC_MODEL` único que propone `DOC-07`.
+
+---
+
+### `HYG-06` ⚪ La base de datos no se reinicia con Docker
+
+> Posterior a la foto: encontrado el 2026-09-14 durante la verificación de `BUG-05`.
+
+**Ubicación.** `docker-compose.yml`: el servicio `postgres` no declara `restart`.
+
+**Análisis.** Tras reiniciar Docker Desktop o el equipo, el contenedor queda parado y la API falla con conexión rechazada en el puerto 5433, sin que nada indique por qué.
+
+**Evidencia.** El 2026-09-14 a las 17:37:52 UTC, Docker Desktop se reinició a mitad de una verificación. Los tres contenedores en ejecución se detuvieron en el mismo instante. Los dos que tenían política de reinicio volvieron solos; el del sandbox no. El apagado fue limpio y no se perdieron datos.
+
+**Parche.**
+
+```yaml
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+```
+
+---
+
 ## 9. Traza End-to-End Anotada
 
 Recorrido de una consulta real por el sistema, señalando dónde se activa cada hallazgo. Escenario: usuario autenticado como `bryan` envía *"¿Y en qué años trabajó con eso?"* como **segunda** pregunta de la conversación, tras haber preguntado por AWS.
@@ -2437,6 +2632,30 @@ Recorrido de una consulta real por el sistema, señalando dónde se activa cada 
 ## 10. Plan de Remediación
 
 Ordenado por relación impacto/esfuerzo. Las estimaciones son de implementación, sin incluir pruebas.
+
+### Avance al 2026-09-14
+
+| Bloque | Estado |
+|---|---|
+| 0 — Desbloqueo | ✅ cerrado (`BUG-08`) |
+| 1 — Seguridad | ✅ cerrado (`SEC-01` a `SEC-04`) |
+| 2 — Corrección funcional | ✅ cerrado (`BUG-01` a `BUG-06`, más `BUG-09`) |
+| 3 — Rendimiento | ⬜ abierto; es el siguiente |
+| 4 — Reconciliación documental | ⬜ abierto (`DOC-01` ya corregido) |
+| 5 — Higiene y cobertura | ⬜ abierto |
+
+Los hallazgos posteriores a la foto, con el bloque en que encajan:
+
+| # | Acción | Hallazgo | Bloque | Esfuerzo |
+|:---:|---|---|:---:|:---:|
+| 29 | Decidir cómo hacer infalsificable desde SQL el contexto de tenant, e implementarlo junto al pool | `SEC-05` | 3, con el paso 12 | 2–4 h |
+| 30 | Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
+| 31 | No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
+| 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
+| 33 | `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
+| D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |
+
+Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`).
 
 ### Bloque 0 — Desbloqueo (prerrequisito de todo lo demás)
 
