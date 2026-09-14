@@ -82,7 +82,8 @@ Este documento es una foto del estado en la fecha de cabecera. Lo corregido desd
 | `BUG-09` | ✅ corregido | 2026-09-13 | Hallazgo nuevo: el stream no devolvía respuesta para saludos, fuera de alcance ni herramientas. Corregido con `DOC-01` |
 | `SEC-04` | ✅ corregido | 2026-09-14 | Temporal con nombre aleatorio; el original solo como metadato. Control negativo contra uvicorn real: 1/9 → 9/9 propiedades; ingesta real 8/8 |
 | `SEC-03` | ✅ corregido | 2026-09-14 | `ILIKE ANY($1::text[])` parametrizado. Con tokenizador permisivo, la versión vieja cae ante los tres payloads, incluida una lectura entre tenants; la nueva, ante ninguno. Mismos resultados en 16 consultas reales |
-| Los otros 20 | ⬜ abiertos | — | — |
+| `BUG-02` | ✅ corregido | 2026-09-14 | Lista blanca de intenciones, más confianza y `requires_more_info`, en ambos endpoints. Contra servidor real: 3/8 → 8/8. Antes, *"¿Cuánto vale ethereum?"* recibía el precio de bitcoin desde caché |
+| Los otros 19 | ⬜ abiertos | — | — |
 
 ---
 
@@ -751,6 +752,38 @@ grep -n "check_semantic_cache\|save_semantic_cache\|intent_type" src/api/routers
 Endpoint SSE: capturar `intent_type` del `state_update` del supervisor (que ya se recorre en l. 104) y aplicar la misma condición antes de la l. 123.
 
 Las dos condiciones adicionales evitan otro problema latente: hoy se cachea igualmente una respuesta con `requires_more_info=True` o `confidence_score=0.2` —es decir, se fija permanentemente una respuesta que el propio sistema considera insuficiente.
+
+**Estado: ✅ corregido (2026-09-14).** Los dos endpoints guardan en caché solo si `is_cacheable(intent_type, respuesta)` lo permite: la intención está en la lista blanca `{knowledge_search, casual_greeting}`, `requires_more_info` es falso y `confidence_score ≥ 0,5`. El stream toma `intent_type` del `state_update` del supervisor. Tres diferencias con el parche de arriba:
+
+- **Lista blanca en vez de lista negra.** `QueryIntent.intent_type` es un `str` libre que rellena el LLM, y con lista negra cualquier valor inesperado se cachearía.
+- **Cambió el alcance.** La precisión de arriba ya no vale: al corregir `BUG-09` (2026-09-13), `/chat/stream/` pasó a recoger también la respuesta del supervisor, y desde entonces cacheaba herramientas y `out_of_scope` igual que `/chat/`.
+- **El daño era mayor.** No se limitaba a datos viejos: servía datos de **otra consulta**. Medido con el modelo real (`all-MiniLM-L6-v2`, umbral 0,85):
+
+| Par de consultas | Similitud | ¿Hit? |
+|---|:---:|:---:|
+| `¿Cuánto vale bitcoin?` ↔ `¿Cuánto vale ethereum?` | 0,886 | sí |
+| `¿Cuál es la capital de Francia?` ↔ `¿Cuál es la capital de Chile?` | 0,860 | sí |
+| `¿Qué hora es?` ↔ `¿me dices la hora?` | 0,815 | no |
+| `Hola` ↔ `Hola, ¿qué hora es?` | 0,535 | no |
+
+Los saludos no colisionan con peticiones que empiezan por "Hola" (0,28–0,67 en los pares medidos), y por eso siguen siendo cacheables.
+
+Verificado contra uvicorn real, con el grafo, el LLM y Postgres de verdad, como el tenant sin filas en caché. `analyze_query` se envolvió solo para registrar la intención, sin alterar el resultado. El oráculo: una respuesta del grafo escribe fila en `semantic_cache` si y solo si la política lo permite.
+
+| Escenario | Antes | Después |
+|---|---|---|
+| `¿Qué hora es?` dos veces, `/chat/` | Hit: `12:58:15` las dos veces | `13:00:58` → `13:01:02`, sin fila |
+| `¿Qué hora es?` dos veces, `/chat/stream/` | Hit: `12:58:19` las dos veces | `13:01:03` → `13:01:07`, sin fila |
+| Bitcoin y después ethereum | Hit: *"El precio actual de Bitcoin es $78593 USD"* | *"El precio actual de Ethereum es $2507.41 USD"* |
+| Francia y después Chile (`out_of_scope`) | Hit con la respuesta de Francia | Respuesta propia, sin fila |
+| Saludo | Se cachea | Se cachea |
+| Conocimiento repetido (control positivo) | Hit | Hit |
+| Filas escritas contra la política | 4 | 0 (10 respuestas evaluadas) |
+| **Comprobaciones** | **3/8** | **8/8** |
+
+Aparte, 11 casos límite de `is_cacheable` que el LLM no produce a voluntad: `requires_more_info=True`, confianza 0,49 / 0,5 / `None`, intención con otra capitalización, vacía o `None`. Todos correctos. La base se devolvió a su estado inicial, esperando a que terminaran los background tasks.
+
+**Pendiente.** Una fila de la base auditada no pasaría la política (`requires_more_info=true`, confianza 0,75) y se sigue sirviendo. El caché tampoco tiene en cuenta el historial: el texto de una pregunta de seguimiento (*"¿Y en qué años?"*) no basta como clave, porque su respuesta depende de la conversación.
 
 ---
 

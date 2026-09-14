@@ -17,6 +17,22 @@ from src.services.agent_graph.state import AgentState
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
+# Solo se cachean respuestas que sigan valiendo la próxima vez que alguien pregunte
+# algo parecido. El caché se consulta antes que el supervisor y compara por similitud,
+# así que una herramienta cacheada devolvería datos viejos o de otra consulta (el
+# precio de bitcoin a quien pregunta por ethereum), y un 'out_of_scope' contestaría a
+# otra pregunta. Es una lista blanca porque intent_type lo escribe el LLM como texto
+# libre: un valor inesperado no debe acabar en caché.
+CACHEABLE_INTENTS = {"knowledge_search", "casual_greeting"}
+MIN_CACHE_CONFIDENCE = 0.5
+
+
+def is_cacheable(intent_type: str | None, answer: dict) -> bool:
+    # Tampoco se fija para siempre una respuesta que el propio sistema da por insuficiente.
+    return (intent_type in CACHEABLE_INTENTS
+            and not answer.get("requires_more_info")
+            and (answer.get("confidence_score") or 0) >= MIN_CACHE_CONFIDENCE)
+
 # Instanciamos el grafo una vez (es thread-safe)
 agent_graph = build_graph()
 
@@ -54,7 +70,9 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
             raise HTTPException(status_code=500, detail="El Grafo de Agentes no devolvió una respuesta final.")
             
         # 5. Tareas post-respuesta
-        await save_semantic_cache(current_user.tenant_id, request.query, structured_response.model_dump())
+        response_dict = structured_response.model_dump()
+        if is_cacheable(final_state.get("intent_type"), response_dict):
+            await save_semantic_cache(current_user.tenant_id, request.query, response_dict)
         background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
         
         # Evaluación RAG en Background
@@ -101,6 +119,7 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
             # genera (lo escribe generator_node con get_stream_writer) y 'updates'
             # trae el progreso por nodo y el estado final.
             final_dict = None
+            intent_type = None
             accumulated_answer = ""
             retrieved_docs = []
             async for mode, chunk in agent_graph.astream(initial_state, stream_mode=["updates", "custom"]):
@@ -110,6 +129,8 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                     continue
 
                 for node_name, state_update in chunk.items():
+                    if state_update and state_update.get("intent_type"):
+                        intent_type = state_update["intent_type"]
                     if node_name == "supervisor":
                         accumulated_answer += "🤖 *Supervisor evaluando estrategia...*\n\n"
                         yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
@@ -136,7 +157,7 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                         stream_dict = {**final_dict, "answer": accumulated_answer}
                         yield f"data: {json.dumps(stream_dict)}\n\n"
                             
-            if final_dict:
+            if final_dict and is_cacheable(intent_type, final_dict):
                 await save_semantic_cache(current_user.tenant_id, request.query, final_dict)
             background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
             
