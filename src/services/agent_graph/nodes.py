@@ -42,7 +42,9 @@ async def supervisor_node(state: AgentState) -> dict:
     if intent.intent_type == "tool_execution":
         tool_func = TOOLS_REGISTRY.get(intent.tool_name)
         if tool_func:
-            tool_result = tool_func(**intent.tool_args)
+            # Las herramientas hacen peticiones HTTP síncronas (requests): en un hilo, para
+            # que el event loop siga atendiendo mientras esperan a la red (PERF-03).
+            tool_result = await asyncio.to_thread(tool_func, **intent.tool_args)
             ans = f"¡Herramienta ejecutada ({intent.tool_name})! Resultado:\n\n{tool_result}"
         else:
             ans = f"Error: Herramienta '{intent.tool_name}' no encontrada."

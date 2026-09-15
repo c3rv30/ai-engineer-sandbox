@@ -90,7 +90,8 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `BUG-05` | ✅ corregido | 2026-09-14 | Opción (a): cada reintento amplía la ventana (15/10 → 30/15, con tope en los máximos de la API) y no se reintenta si ampliar no puede aportar nada. Contra servidor real: 3/7 → 7/7; reintentos idénticos 3 → 0 |
 | `PERF-01` | ✅ corregido | 2026-09-15 | Pool único en `db.py` y `set_config` local a la transacción. Conexiones por consulta 8 → 0; 25 consultas concurrentes: 7 `TooManyConnectionsError` → 0; aislamiento verificado con pool de 2 |
 | `PERF-02` | ✅ corregido | 2026-09-15 | Instancia única en `embeddings.py` con `to_pgvector`. Instancias 4 → 1; importación de la API 16,6 s → 5,6 s; *physical footprint* −102 MB (no 270–360 MB); resultados idénticos |
-| Los otros 14 de la foto | ⬜ abiertos | — | — |
+| `PERF-03` | ✅ corregido | 2026-09-15 | `chunk_text` y herramientas en `asyncio.to_thread`. Espera máxima de `/health`: ingesta 1182 → 21 ms, herramienta 204 → 14 ms; PDF de 20 páginas: parada del event loop 1060 → 16 ms, mismos fragmentos |
+| Los otros 13 de la foto | ⬜ abiertos | — | — |
 | `SEC-05`, `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
@@ -1862,6 +1863,32 @@ grep -n "model.encode" src/services/ingestion.py
 
 **Nota relacionada, misma causa.** Las tres herramientas de `src/services/tools.py` usan `requests` (síncrono) y se invocan desde `supervisor_node`, que es `async` (`nodes.py:40`: `tool_result = tool_func(**intent.tool_args)`). Cada llamada a CoinGecko o GitHub bloquea el event loop hasta el timeout de 5 segundos. La corrección es la misma —`await asyncio.to_thread(tool_func, **intent.tool_args)`— o migrar `tools.py` a `httpx.AsyncClient`, que ya está en el árbol de dependencias como transitiva de `anthropic`.
 
+**Estado: ✅ corregido (2026-09-15).** Tres cambios:
+
+- **`chunk_text` se despacha completo con `asyncio.to_thread`** en sus dos llamadas: `ingest_file` (texto y markdown) y `process_pdf` (cada página).
+- **Las herramientas del supervisor también**, con `await asyncio.to_thread(tool_func, **intent.tool_args)`. Se descartó migrar `tools.py` a `httpx.AsyncClient` porque cambiaría la interfaz de las herramientas por lo mismo que resuelve una línea. Contrapartida: una herramienta lenta ocupa un hilo del ejecutor por defecto, que comparte con los embeddings, hasta su timeout de 5 s.
+- **Se corrige el comentario de `chunk_text`** que afirmaba que el embedding *"es instantáneo localmente"*: tardó entre 0,6 y 1,2 s con 400 oraciones.
+
+Verificado contra el servidor real. Durante cada escenario, un cliente sondea `/health` cada 20 ms, y lo que se mide es cuánto espera como máximo. En la ingesta se sustituyeron solo la inserción en BD y la extracción de GraphRAG, que no intervienen en el bloqueo; el troceado y los embeddings son los reales. Las herramientas se envolvieron solo para registrar su duración.
+
+| Escenario | Trabajo síncrono | `/health` máx. antes | `/health` máx. después |
+|---|---|:---:|:---:|
+| Reposo | — | 17,6 ms | 13,2 ms |
+| Ingesta de un `.txt` de 400 oraciones (58 fragmentos) | `chunk_text`: 1151 ms / 604 ms | **1182 ms** | **21 ms** |
+| Chat con `get_crypto_price` (CoinGecko real) | herramienta: 178 ms / 129 ms | **204 ms** | **13,6 ms** |
+
+Antes, la espera de `/health` coincidía con la duración del trabajo síncrono: el servidor no atendía nada más. Salen los mismos 58 fragmentos, la herramienta devuelve el precio y la base queda en su estado inicial. La diferencia de duración de `chunk_text` entre ejecuciones no se debe al cambio: el hilo no acelera el cálculo, solo evita que congele el servidor.
+
+**Ruta de PDF**, medida aparte, sin BD ni LLM, con un latido de 5 ms en el mismo proceso: un PDF de 20 páginas con 80 oraciones cada una, procesado por la versión anterior (`e711924`) y por la nueva.
+
+| | Antes | Después |
+|---|:---:|:---:|
+| Parada máxima del event loop | **1060 ms** | **16 ms** |
+| Duración de `process_pdf` | 1,05 s | 1,00 s |
+| Fragmentos | 217 | 217, idénticos |
+
+**Precisión al análisis de arriba.** Con un PDF solo de texto no hay un bloqueo por página, sino **uno solo que dura todo el procesado**: 1060 ms de parada en 1,05 s. `process_pdf` no tiene ningún `await` entre páginas cuando no hay imágenes, así que no devolvía el control al event loop hasta terminar. Siguen siendo síncronos, y quedan como están, `fitz.open`/`get_text` y las lecturas de archivo de `ingest_file`, que en esta medición son de milisegundos.
+
 ---
 
 ### `PERF-04` 🟡 `max_tokens=300` trunca al evaluador
@@ -2705,7 +2732,7 @@ Ordenado por relación impacto/esfuerzo. Las estimaciones son de implementación
 | 0 — Desbloqueo | ✅ cerrado (`BUG-08`) |
 | 1 — Seguridad | ✅ cerrado (`SEC-01` a `SEC-04`) |
 | 2 — Corrección funcional | ✅ cerrado (`BUG-01` a `BUG-06`, más `BUG-09`) |
-| 3 — Rendimiento | ⬜ en curso: `PERF-01` y `PERF-02` corregidos (2026-09-15); quedan `PERF-03` y `PERF-04` |
+| 3 — Rendimiento | ⬜ en curso: `PERF-01`, `PERF-02` y `PERF-03` corregidos (2026-09-15); queda `PERF-04` |
 | 4 — Reconciliación documental | ⬜ abierto (`DOC-01` ya corregido) |
 | 5 — Higiene y cobertura | ⬜ abierto |
 

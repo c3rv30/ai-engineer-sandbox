@@ -62,7 +62,8 @@ def chunk_text(content: str, source_type: str, max_tokens: int = 400, overlap: i
         )]
         
     # 2. Vectorizar oraciones para comparar similitud
-    # Al estar corriendo en la ingestión, esto es instantáneo localmente
+    # Es trabajo de CPU (~1,2 s para 400 oraciones): desde código async hay que llamar a
+    # chunk_text con asyncio.to_thread o el servidor deja de atender mientras dura (PERF-03).
     sentence_embeddings = model.encode(sentences)
     
     distances = [cosine_distance(sentence_embeddings[i], sentence_embeddings[i+1]) for i in range(len(sentences)-1)]
@@ -134,7 +135,7 @@ async def process_pdf(file_path: str) -> List[DocumentChunk]:
         # Extraer Texto
         text = page.get_text()
         if text.strip():
-            page_chunks = chunk_text(text, source_type=f"pdf_page_{page_num+1}")
+            page_chunks = await asyncio.to_thread(chunk_text, text, source_type=f"pdf_page_{page_num+1}")
             chunks.extend(page_chunks)
             
         # Extraer Imágenes (Simple)
@@ -211,7 +212,7 @@ async def ingest_file(file_path: str, tenant_id: uuid.UUID, source: str | None =
     if ext == ".md" or ext == ".txt":
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
-        chunks = chunk_text(content, source_type="markdown")
+        chunks = await asyncio.to_thread(chunk_text, content, source_type="markdown")
     elif ext == ".pdf":
         chunks = await process_pdf(file_path)
     elif ext in [".png", ".jpg", ".jpeg"]:
