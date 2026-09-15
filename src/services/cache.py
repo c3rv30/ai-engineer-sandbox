@@ -1,23 +1,12 @@
 import uuid
 import json
-import asyncio
 from typing import Optional
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 
 from src.services.db import tenant_connection
+from src.services.embeddings import embed, to_pgvector
 
 load_dotenv()
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-# Reutilizar el mismo modelo en memoria (debería idealmente instanciarse 1 sola vez por app)
-model = SentenceTransformer(EMBEDDING_MODEL)
-
-
-async def _embed(query: str) -> str:
-    # Se calcula antes de tomar conexión: es trabajo de CPU y retendría una del pool.
-    query_embedding = await asyncio.to_thread(model.encode, query)
-    return f"[{','.join(str(x) for x in query_embedding.tolist())}]"
 
 
 async def check_semantic_cache(tenant_id: uuid.UUID, query: str, threshold: float = 0.85) -> Optional[dict]:
@@ -25,7 +14,8 @@ async def check_semantic_cache(tenant_id: uuid.UUID, query: str, threshold: floa
     Busca si existe una pregunta muy similar (cosine similarity > threshold) en caché.
     Retorna el diccionario JSON con la respuesta si es un Cache Hit, sino None.
     """
-    emb_str = await _embed(query)
+    # Se calcula antes de tomar conexión: es trabajo de CPU y retendría una del pool.
+    emb_str = to_pgvector(await embed(query))
 
     # <= operator computes distance. Similarity = 1 - distance.
     sql = """
@@ -49,7 +39,8 @@ async def save_semantic_cache(tenant_id: uuid.UUID, query: str, response_dict: d
     """
     Guarda la pregunta y su respuesta en la tabla de caché semántico.
     """
-    emb_str = await _embed(query)
+    # Se calcula antes de tomar conexión: es trabajo de CPU y retendría una del pool.
+    emb_str = to_pgvector(await embed(query))
 
     sql = """
     INSERT INTO semantic_cache (tenant_id, query_text, query_embedding, response_json)

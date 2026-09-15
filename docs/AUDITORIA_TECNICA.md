@@ -89,7 +89,8 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `BUG-06` | ✅ corregido | 2026-09-14 | `top_k` propagados hasta el investigador, con valores por defecto únicos (15/10), límites de rango y sin caché cuando difieren. Contra servidor real: 3/8 → 8/8; fuera de rango 200 → 422 |
 | `BUG-05` | ✅ corregido | 2026-09-14 | Opción (a): cada reintento amplía la ventana (15/10 → 30/15, con tope en los máximos de la API) y no se reintenta si ampliar no puede aportar nada. Contra servidor real: 3/7 → 7/7; reintentos idénticos 3 → 0 |
 | `PERF-01` | ✅ corregido | 2026-09-15 | Pool único en `db.py` y `set_config` local a la transacción. Conexiones por consulta 8 → 0; 25 consultas concurrentes: 7 `TooManyConnectionsError` → 0; aislamiento verificado con pool de 2 |
-| Los otros 15 de la foto | ⬜ abiertos | — | — |
+| `PERF-02` | ✅ corregido | 2026-09-15 | Instancia única en `embeddings.py` con `to_pgvector`. Instancias 4 → 1; importación de la API 16,6 s → 5,6 s; *physical footprint* −102 MB (no 270–360 MB); resultados idénticos |
+| Los otros 14 de la foto | ⬜ abiertos | — | — |
 | `SEC-05`, `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
@@ -107,6 +108,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`BUG-04`**: `FORCE ROW LEVEL SECURITY` no protege el DSN de `postgres` de `.env.example`, porque un superusuario elude RLS con o sin `FORCE`.
 - **`PERF-04`**: el evaluador falla de forma intermitente, no siempre. El mensaje del commit `d198be1` (`BUG-02`) dice lo contrario y es incorrecto.
 - **`PERF-01`**: la fuga entre tenants que se temía al reutilizar conexiones no llegaría a producirse con asyncpg 0.31, cuyo `RESET ALL` al devolver una conexión borra el tenant de sesión (medido). Con un reset vacío la fuga sí aparece. Tampoco era cierto que los nueve accesos usaran `app_user`: `ingestion.py` usaba por defecto el superusuario.
+- **`PERF-02`**: las tres copias sobrantes del modelo costaban ~102 MB de *physical footprint* medido, no los 270–360 MB estimados. La estimación de que consolidarlas acortaba el arranque sí se confirma: la importación de la API pasa de 16,6 s a 5,6 s.
 
 ---
 
@@ -1778,6 +1780,29 @@ emb_str = f"[{','.join(str(x) for x in query_embedding.tolist())}]"
 
 está repetida **siete veces** de forma literal (`retriever.py:28`, `cache.py:26`, `cache.py:54`, `memory.py:54`, `memory.py:75`, `ingestion.py:194`, y en `test_sim.py`). Centralizar `EMBEDDING_DIM` también documenta el acoplamiento con `vector(384)` del esquema, hoy implícito.
 
+**Estado: ✅ corregido (2026-09-15).** Hay un módulo nuevo, `src/services/embeddings.py`, con la única instancia del modelo, `embed()` (el embedding en un hilo) y `to_pgvector()`. `retriever.py`, `cache.py`, `memory.py` e `ingestion.py` ya no instancian el modelo ni repiten la conversión a pgvector. Tres diferencias con el parche de arriba:
+
+- **Se carga al importar, no en la primera llamada.** Es el mismo patrón del `Ranker`. Con `lru_cache`, la primera petición pagaría varios segundos de carga, y la caché no protege de dos hilos a la vez: varias llamadas simultáneas desde `asyncio.to_thread` podrían cargar el modelo dos veces.
+- **`to_pgvector()` acepta un array de numpy o una lista**, porque `ingestion.py` guarda el embedding ya convertido a lista.
+- **Al importar se comprueba que el modelo produce 384 dimensiones.** Así, un cambio de modelo falla al arrancar, con un mensaje que remite al esquema, en lugar de fallar en el primer `INSERT`.
+
+`chunk_text` sigue llamando a `model.encode` en el hilo del event loop; eso es `PERF-03`.
+
+Verificado importando la aplicación real (`src.api.main`) en un proceso limpio. El código anterior se ejecutó desde un worktree del commit previo (`491a71b`), con la caché de disco ya caliente para las dos variantes:
+
+| Medida | Antes | Después |
+|---|:---:|:---:|
+| Instancias de `SentenceTransformer` vivas | 4 | **1** |
+| Memoria nominal de parámetros | 363,6 MB (4 × 90,9) | **90,9 MB** |
+| Importación de `src.api.main` | 16,6 s | **5,6 s** |
+| *Physical footprint* del proceso tras importar (3 mediciones por variante) | 1350–1351 MB | **1248–1249 MB** |
+
+Comprobaciones de equivalencia y de funcionamiento:
+- **Mismos resultados** (12 entradas) que el código anterior: búsquedas de los dos tenants, caché, memoria, el troceado semántico de un texto y el hash de sus embeddings.
+- **La aplicación real carga el modelo una sola vez.** Chat por stream, ingesta por API y por CLI funcionan sin errores y sin conexiones nuevas, y la base queda en su estado inicial.
+
+**Corrección a la estimación de arriba.** El ahorro de memoria medido es de **~102 MB** de *physical footprint*, estable en las seis mediciones, y no de 270–360 MB. Las copias eran independientes: cuatro direcciones distintas de pesos, sin almacenamiento respaldado por archivo. Por qué el footprint baja menos que la memoria nominal (272 MB) queda **sin explicar**. El RSS de macOS no sirve para medirlo: osciló entre 197 y 274 MB en ejecuciones idénticas. Lo que sí se confirma es la otra mitad del análisis: el arranque en frío. Importar la API pasa de 16,6 s a 5,6 s, que es buena parte de la ventana de `TROUBLESHOOTING.md` §3.
+
 ---
 
 ### `PERF-03` 🟡 `model.encode` bloquea el event loop en la ingesta
@@ -2680,7 +2705,7 @@ Ordenado por relación impacto/esfuerzo. Las estimaciones son de implementación
 | 0 — Desbloqueo | ✅ cerrado (`BUG-08`) |
 | 1 — Seguridad | ✅ cerrado (`SEC-01` a `SEC-04`) |
 | 2 — Corrección funcional | ✅ cerrado (`BUG-01` a `BUG-06`, más `BUG-09`) |
-| 3 — Rendimiento | ⬜ en curso: `PERF-01` corregido (2026-09-15); quedan `PERF-02`, `PERF-03` y `PERF-04` |
+| 3 — Rendimiento | ⬜ en curso: `PERF-01` y `PERF-02` corregidos (2026-09-15); quedan `PERF-03` y `PERF-04` |
 | 4 — Reconciliación documental | ⬜ abierto (`DOC-01` ya corregido) |
 | 5 — Higiene y cobertura | ⬜ abierto |
 

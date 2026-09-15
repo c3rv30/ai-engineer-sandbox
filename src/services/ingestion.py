@@ -11,17 +11,12 @@ import tiktoken
 import fitz  # PyMuPDF
 from anthropic import AsyncAnthropic
 from langfuse import observe
-from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
+
+from src.services.embeddings import EMBEDDING_MODEL, model, to_pgvector
 
 load_dotenv()
 
-# Configuración
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-print(f"Cargando modelo local {EMBEDDING_MODEL} (esto puede tomar un momento la primera vez)...")
-model = SentenceTransformer(EMBEDDING_MODEL)
-print("Modelo cargado.")
 
 class DocumentChunk(BaseModel):
     text: str = Field(..., description="El contenido de texto del chunk")
@@ -189,7 +184,7 @@ async def insert_documents(chunks: List[DocumentChunk], source: str, tenant_id: 
         """
         records = []
         for chunk in chunks:
-            emb_str = f"[{','.join(str(x) for x in chunk.embedding)}]"
+            emb_str = to_pgvector(chunk.embedding)
             chunk.metadata["source"] = source
             records.append((tenant_id, chunk.text, emb_str, json.dumps(chunk.metadata)))
             

@@ -1,19 +1,13 @@
 import uuid
-import asyncio
 import json
 from typing import List
 from dotenv import load_dotenv
 load_dotenv()
 
-from sentence_transformers import SentenceTransformer
 from langfuse import observe
 from src.models.search import SearchResult
 from src.services.db import tenant_connection
-
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-print(f"Cargando modelo local de embedding {EMBEDDING_MODEL} para Retriever...")
-model = SentenceTransformer(EMBEDDING_MODEL)
+from src.services.embeddings import embed, to_pgvector
 
 @observe(name="hybrid_search")
 async def retrieve_documents(query: str, tenant_id: uuid.UUID, top_k: int = 5) -> List[SearchResult]:
@@ -23,8 +17,7 @@ async def retrieve_documents(query: str, tenant_id: uuid.UUID, top_k: int = 5) -
     """
     # El embedding se calcula antes de tomar conexión: es trabajo de CPU y retendría
     # una conexión del pool sin usarla.
-    query_embedding = await asyncio.to_thread(model.encode, query)
-    emb_str = f"[{','.join(str(x) for x in query_embedding.tolist())}]"
+    emb_str = to_pgvector(await embed(query))
 
     sql_query = """
     WITH vector_search AS (

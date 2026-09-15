@@ -1,17 +1,14 @@
 import os
 import uuid
-import asyncio
 import instructor
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
-from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
 from src.services.db import tenant_connection
+from src.services.embeddings import embed, to_pgvector
 
 load_dotenv()
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-model = SentenceTransformer(EMBEDDING_MODEL)
 
 client = instructor.from_anthropic(AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY")))
 
@@ -48,11 +45,11 @@ async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
         
         # Los embeddings se calculan antes de tomar conexión: es trabajo de CPU y
         # retendría una conexión del pool sin usarla.
-        embeddings = [await asyncio.to_thread(model.encode, fact) for fact in extraction.new_facts]
+        embeddings = [await embed(fact) for fact in extraction.new_facts]
         async with tenant_connection(tenant_id) as conn:
             
             for fact, fact_embedding in zip(extraction.new_facts, embeddings):
-                emb_str = f"[{','.join(str(x) for x in fact_embedding.tolist())}]"
+                emb_str = to_pgvector(fact_embedding)
                 
                 sql = """
                 INSERT INTO user_memory (tenant_id, fact, fact_embedding)
@@ -68,8 +65,7 @@ async def retrieve_user_facts(tenant_id: uuid.UUID, query: str, top_k: int = 3) 
     """
     # El embedding se calcula antes de tomar conexión: es trabajo de CPU y retendría
     # una conexión del pool sin usarla.
-    query_embedding = await asyncio.to_thread(model.encode, query)
-    emb_str = f"[{','.join(str(x) for x in query_embedding.tolist())}]"
+    emb_str = to_pgvector(await embed(query))
     async with tenant_connection(tenant_id) as conn:
         
         
