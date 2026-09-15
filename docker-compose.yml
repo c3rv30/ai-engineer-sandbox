@@ -5,6 +5,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: postgres
+      # La lee 01_init.sql para sembrar la clave con la que las políticas RLS verifican
+      # la firma del tenant (SEC-05). Sale del .env del proyecto y es la misma que usa
+      # la aplicación; sin ella, compose se niega a arrancar en vez de crear una base
+      # con la que la aplicación no podría leer ni una fila.
+      TENANT_SIGNING_KEY: ${TENANT_SIGNING_KEY:?define TENANT_SIGNING_KEY en .env (openssl rand -hex 32)}
     ports:
       - "5433:5432"
     volumes:

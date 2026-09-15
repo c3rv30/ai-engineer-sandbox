@@ -46,6 +46,7 @@ El valor de esta auditoría no está en cuestionar el diseño sino en registrar 
 > **Posteriores a la foto.** No se suman a este recuento, que es el estado del 2026-09-10. Todos aparecieron al verificar correcciones contra el sistema real y están en el índice (§2) y en la tabla de remediación:
 > - `BUG-09` (🟠), el 2026-09-13, al reescribir el bucle de streaming para `DOC-01`.
 > - `SEC-05` (🟠), `SEC-06` (🟡), `BUG-10` (🟠), `HYG-05` (🟡) y `HYG-06` (⚪), el 2026-09-14.
+> - `HYG-07` (🟡), el 2026-09-15, al implementar el parche de `SEC-05`.
 
 ### Criterios de severidad
 
@@ -93,8 +94,10 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `PERF-03` | ✅ corregido | 2026-09-15 | `chunk_text` y herramientas en `asyncio.to_thread`. Espera máxima de `/health`: ingesta 1182 → 21 ms, herramienta 204 → 14 ms; PDF de 20 páginas: parada del event loop 1060 → 16 ms, mismos fragmentos |
 | `PERF-04` | ✅ corregido | 2026-09-15 | `max_tokens` 300 → 1024, `reasoning` ≤ 600 caracteres y `max_retries=3` explícito. Juez real, 15 evaluaciones por variante: perdidas 10/15 → 0/15 |
 | `DOC-02` | ✅ corregido | 2026-09-15 | `ge`/`le` en las tres puntuaciones de `RAGEvaluation`: un 1,2 falla en Pydantic (reintentable) y no en el `CHECK` de SQL (pérdida silenciosa). Con `PERF-04` |
+| `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | Los otros 11 de la foto | ⬜ abiertos | — | — |
-| `SEC-05`, `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
+| `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
+| `HYG-07` | ⬜ abierto | 2026-09-15 | Hallazgo nuevo, encontrado al corregir `SEC-05`; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
 
@@ -111,6 +114,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`BUG-04`**: `FORCE ROW LEVEL SECURITY` no protege el DSN de `postgres` de `.env.example`, porque un superusuario elude RLS con o sin `FORCE`.
 - **`PERF-04`**: el evaluador no fallaba siempre, como dice el commit `d198be1` (`BUG-02`), pero tampoco de vez en cuando: con un contexto realista de 10 documentos perdía **10 de cada 15** evaluaciones por `max_tokens`.
 - **`PERF-01`**: la fuga entre tenants que se temía al reutilizar conexiones no llegaría a producirse con asyncpg 0.31, cuyo `RESET ALL` al devolver una conexión borra el tenant de sesión (medido). Con un reset vacío la fuga sí aparece. Tampoco era cierto que los nueve accesos usaran `app_user`: `ingestion.py` usaba por defecto el superusuario.
+- **`SEC-05`**: el parche propuesto (opción 1) no bastaba tal como estaba descrito. Guardar la clave en una tabla de `public` "sin `GRANT` a `app_user`" no la protege: `sql/00_create_app_user.sql` deja un `ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user`, así que la tabla nace con un `GRANT` explícito al rol y `REVOKE ... FROM PUBLIC` no lo deshace. La primera versión del parche pasó todas las pruebas de aislamiento y aun así `app_user` podía leer la clave y firmar cualquier tenant; se descubrió porque el control negativo lo comprobaba explícitamente. La clave vive ahora en un esquema propio (`tenant_security`). El `ALTER DEFAULT PRIVILEGES` queda catalogado aparte como `HYG-07`.
 - **`PERF-02`**: las tres copias sobrantes del modelo costaban ~102 MB de *physical footprint* medido, no los 270–360 MB estimados. La estimación de que consolidarlas acortaba el arranque sí se confirma: la importación de la API pasa de 16,6 s a 5,6 s.
 
 ---
@@ -153,8 +157,9 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `BUG-10` | 🟠 | El caché semántico ignora el historial | `src/services/cache.py:17` | 2 |
 | `HYG-05` | 🟡 | Tres servicios crean su cliente de Anthropic antes de cargar `.env` | `src/services/router.py:10` | 5 |
 | `HYG-06` | ⚪ | La base de datos no se reinicia con Docker | `docker-compose.yml` | 5 |
+| `HYG-07` | 🟡 | `ALTER DEFAULT PRIVILEGES` regala a `app_user` cualquier tabla futura de `public` | `sql/00_create_app_user.sql:5` | 5 |
 
-Las cinco últimas filas son posteriores a la foto (2026-09-14) y no entran en el recuento de §1.
+Las seis últimas filas son posteriores a la foto (cinco del 2026-09-14 y `HYG-07` del 2026-09-15) y no entran en el recuento de §1.
 
 ---
 
@@ -661,6 +666,26 @@ LIMIT 10;                                              -- filas del otro tenant
 3. **Cero SQL dinámico como regla comprobada.** Un test o linter que falle ante interpolación en `execute`/`fetch`. No corrige el diseño; reduce la probabilidad de que aparezca un vector.
 
 Conviene decidirlo junto a `PERF-01`: los dos cambian cómo recibe cada conexión su tenant (`set_config` local a una transacción).
+
+**Estado:** ✅ corregido el 2026-09-15 con la **opción 1, contexto firmado** (decisión del usuario).
+
+`tenant_connection()` (`src/services/db.py`) fija ahora dos variables locales a la transacción: `app.current_tenant` y `app.tenant_signature`, esta última el HMAC-SHA256 del tenant con la clave de `TENANT_SIGNING_KEY`. Las cinco políticas dejan de leer `current_setting` y llaman a `app_current_tenant()`, función `SECURITY DEFINER`, `STABLE`, propiedad de `postgres` y con `search_path` fijo, que solo devuelve el tenant si la firma cuadra con la clave de `tenant_security.signing_key`. Una sentencia inyectada puede reescribir ambas variables, pero no firmarlas: la función devuelve `NULL` y no hay fila visible.
+
+Verificación como `app_user` contra la BD real, con el payload del hallazgo:
+
+| Caso | Antes | Después |
+|---|:---:|:---:|
+| Contexto legítimo (tenant con 128 tripletas) | 128 | 128 |
+| Tenant reescrito por inyección (el payload de arriba) | **10** | **0** |
+| Contexto sin firma (lo que enviaba el código anterior) | 128 | 0 |
+| Contexto con firma inventada | — | 0 |
+| `app_user` lee la clave de firma | — | `permission denied for schema tenant_security` |
+
+Contra la API real, con la misma pregunta y el caché purgado entre fases: con la clave correcta, 4 fuentes y confianza 0,95; con una clave equivocada, 0 fuentes y *"No hay información disponible en el contexto proporcionado"*. La firma es lo único que cambia entre las dos fases, así que es ella la que sostiene el aislamiento.
+
+**Coste medido.** El temor era que el HMAC se evaluase fila a fila. No ocurre: el plan mete la función como `Index Cond`, y `pg_stat_user_functions` cuenta **2 llamadas por consulta** tanto en un escaneo de 25.000 filas como en cinco consultas seguidas (10 llamadas). Es coste constante, no proporcional a las filas: sobre 50.000 filas sembradas, 30 escaneos completos pasan de 54 ms a 69–71 ms (~0,5 ms por consulta, medido dos veces alternando la política para descartar el orden).
+
+**Arranque.** La clave la comparten la aplicación (`.env`) y la base (`sql/01_init.sql` la siembra vía `\getenv`, y `sql/migrations/apply_tenant_signing.sql` hace lo mismo sobre una base existente). Sin ella nadie arranca a medias: `docker compose` se niega a interpolar, el script de inicialización aborta con mensaje legible —y el contenedor sale, como en `BUG-04`— y la API levanta `RuntimeError` al importar `db.py`.
 
 ---
 
@@ -2713,6 +2738,41 @@ done
 
 ---
 
+### `HYG-07` 🟡 `ALTER DEFAULT PRIVILEGES` regala a `app_user` cualquier tabla futura de `public`
+
+> Posterior a la foto: encontrado el 2026-09-15 al implementar `SEC-05`.
+
+**Ubicación.** `sql/00_create_app_user.sql:5`.
+
+```sql
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO app_user;
+```
+
+**Análisis.** No concede permisos sobre las tablas de hoy, sino sobre todas las que el superusuario cree mañana en `public`. Cualquier tabla nueva nace con un `GRANT ALL` explícito a favor de `app_user`, incluidas las que se creen precisamente para que el rol de la aplicación no las lea. Y como el permiso es un `GRANT` al rol, no a `PUBLIC`, un `REVOKE ALL ... FROM PUBLIC` no lo retira: hay que revocar al rol por su nombre, o crear la tabla fuera de `public`.
+
+Las dos líneas anteriores del mismo script (`GRANT ... ON ALL TABLES` y `ON ALL SEQUENCES`) se ejecutan antes de que exista ninguna tabla, así que no hacen nada; los permisos reales de la aplicación los concede `sql/01_init.sql` al final, tabla por tabla. Esta línea es, por tanto, prescindible.
+
+**Evidencia.** La primera versión del parche de `SEC-05` guardaba la clave de firma en `public.tenant_signing_key` con `REVOKE ALL ON TABLE ... FROM PUBLIC`. Contra una base recién creada desde volumen vacío, `has_table_privilege('app_user', 'tenant_signing_key', 'SELECT')` devolvió `true`, y como `app_user`:
+
+```
+SELECT key FROM tenant_signing_key;   -- b9f23fd87455c8eda71ebebafeaa4f94...
+```
+
+Con esa clave a la vista, `app_user` podía firmar cualquier tenant y `SEC-05` quedaba sin efecto pese a pasar el resto de las pruebas de aislamiento.
+
+**Reproducción.**
+
+```sql
+-- como postgres
+CREATE TABLE secreta (dato TEXT);
+REVOKE ALL ON TABLE secreta FROM PUBLIC;
+SELECT has_table_privilege('app_user', 'secreta', 'SELECT');   -- true
+```
+
+**Parche.** Borrar la línea (las cinco tablas de la aplicación ya reciben su `GRANT` explícito en `01_init.sql`). Mientras siga ahí, todo objeto que deba quedar fuera del alcance de `app_user` va en un esquema aparte, como hace ya la clave de `SEC-05` en `tenant_security`.
+
+---
+
 ## 9. Traza End-to-End Anotada
 
 Recorrido de una consulta real por el sistema, señalando dónde se activa cada hallazgo. Escenario: usuario autenticado como `bryan` envía *"¿Y en qué años trabajó con eso?"* como **segunda** pregunta de la conversación, tras haber preguntado por AWS.
@@ -2770,7 +2830,8 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 
 | # | Acción | Hallazgo | Bloque | Esfuerzo |
 |:---:|---|---|:---:|:---:|
-| 29 | Decidir cómo hacer infalsificable desde SQL el contexto de tenant, e implementarlo junto al pool | `SEC-05` | 3, con el paso 12 | 2–4 h |
+| 29 | ✅ hecho (2026-09-15). Contexto de tenant firmado con HMAC, verificado por una función `SECURITY DEFINER` | `SEC-05` | 3, con el paso 12 | 2–4 h |
+| 34 | Acotar el `ALTER DEFAULT PRIVILEGES` sobre `public` a las cinco tablas de la aplicación | `HYG-07` | 5 | 15 min |
 | 30 | Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
 | 31 | No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
