@@ -11,21 +11,24 @@ anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 client = instructor.from_anthropic(anthropic_client)
 
 class RAGEvaluation(BaseModel):
+    # ge/le: una puntuación fuera de rango falla aquí, donde Instructor reintenta devolviéndole
+    # el error al modelo, y no en el CHECK de SQL, donde la evaluación se perdía (DOC-02).
     faithfulness_score: float = Field(
-        ..., 
+        ..., ge=0.0, le=1.0,
         description="Puntuación de 0.0 a 1.0 indicando si la respuesta es fiel al contexto (sin alucinaciones)."
     )
     relevance_score: float = Field(
-        ..., 
+        ..., ge=0.0, le=1.0,
         description="Puntuación de 0.0 a 1.0 indicando si la respuesta responde directamente a la pregunta."
     )
     context_precision_score: float = Field(
-        ..., 
+        ..., ge=0.0, le=1.0,
         description="Puntuación de 0.0 a 1.0 indicando si el contexto provisto contenía la información necesaria o si había basura irrelevante."
     )
     reasoning: str = Field(
-        ..., 
-        description="Breve explicación de las puntuaciones otorgadas."
+        ...,
+        description="Explicación concisa de las puntuaciones, máximo 3 frases.",
+        max_length=600,
     )
 
 async def evaluate_rag_response(tenant_id: uuid.UUID, query: str, answer: str, context: List[SearchResult]):
@@ -56,9 +59,15 @@ async def evaluate_rag_response(tenant_id: uuid.UUID, query: str, answer: str, c
     try:
         evaluation = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
+            # Con 300, la respuesta del juez se cortaba a mitad del JSON y la evaluación se
+            # perdía (PERF-04). El razonamiento queda acotado en el esquema.
+            max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
             response_model=RAGEvaluation,
+            # Si una puntuación sale de rango o el razonamiento se alarga, Instructor reintenta
+            # devolviendo el error de validación. 3 es su valor por defecto en 1.16; se fija
+            # para no depender de lo que traiga otra versión.
+            max_retries=3,
         )
         
         # Guardar en PostgreSQL

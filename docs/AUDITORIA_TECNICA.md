@@ -91,7 +91,9 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `PERF-01` | ✅ corregido | 2026-09-15 | Pool único en `db.py` y `set_config` local a la transacción. Conexiones por consulta 8 → 0; 25 consultas concurrentes: 7 `TooManyConnectionsError` → 0; aislamiento verificado con pool de 2 |
 | `PERF-02` | ✅ corregido | 2026-09-15 | Instancia única en `embeddings.py` con `to_pgvector`. Instancias 4 → 1; importación de la API 16,6 s → 5,6 s; *physical footprint* −102 MB (no 270–360 MB); resultados idénticos |
 | `PERF-03` | ✅ corregido | 2026-09-15 | `chunk_text` y herramientas en `asyncio.to_thread`. Espera máxima de `/health`: ingesta 1182 → 21 ms, herramienta 204 → 14 ms; PDF de 20 páginas: parada del event loop 1060 → 16 ms, mismos fragmentos |
-| Los otros 13 de la foto | ⬜ abiertos | — | — |
+| `PERF-04` | ✅ corregido | 2026-09-15 | `max_tokens` 300 → 1024, `reasoning` ≤ 600 caracteres y `max_retries=3` explícito. Juez real, 15 evaluaciones por variante: perdidas 10/15 → 0/15 |
+| `DOC-02` | ✅ corregido | 2026-09-15 | `ge`/`le` en las tres puntuaciones de `RAGEvaluation`: un 1,2 falla en Pydantic (reintentable) y no en el `CHECK` de SQL (pérdida silenciosa). Con `PERF-04` |
+| Los otros 11 de la foto | ⬜ abiertos | — | — |
 | `SEC-05`, `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
@@ -107,7 +109,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`SEC-04`**: el path traversal no solo sobrescribe el destino; el `finally` lo borra. Además, el parche propuesto, aplicado solo, habría perdido el nombre original de cada documento.
 - **`BUG-02`**: el caché no solo servía datos viejos, sino datos de otra consulta (el precio de bitcoin a quien preguntaba por ethereum). `out_of_scope` no es inocuo. Desde la corrección de `BUG-09`, `/chat/stream/` también cacheaba herramientas.
 - **`BUG-04`**: `FORCE ROW LEVEL SECURITY` no protege el DSN de `postgres` de `.env.example`, porque un superusuario elude RLS con o sin `FORCE`.
-- **`PERF-04`**: el evaluador falla de forma intermitente, no siempre. El mensaje del commit `d198be1` (`BUG-02`) dice lo contrario y es incorrecto.
+- **`PERF-04`**: el evaluador no fallaba siempre, como dice el commit `d198be1` (`BUG-02`), pero tampoco de vez en cuando: con un contexto realista de 10 documentos perdía **10 de cada 15** evaluaciones por `max_tokens`.
 - **`PERF-01`**: la fuga entre tenants que se temía al reutilizar conexiones no llegaría a producirse con asyncpg 0.31, cuyo `RESET ALL` al devolver una conexión borra el tenant de sesión (medido). Con un reset vacío la fuga sí aparece. Tampoco era cierto que los nueve accesos usaran `app_user`: `ingestion.py` usaba por defecto el superusuario.
 - **`PERF-02`**: las tres copias sobrantes del modelo costaban ~102 MB de *physical footprint* medido, no los 270–360 MB estimados. La estimación de que consolidarlas acortaba el arranque sí se confirma: la importación de la API pasa de 16,6 s a 5,6 s.
 
@@ -1971,6 +1973,26 @@ Combinar con el parche de `DOC-02` (añadir `ge`/`le` a los tres scores), que co
 
 La base de desarrollo no tiene ninguna evaluación. El mensaje del commit `d198be1` (`BUG-02`) afirma que el evaluador falla siempre; es incorrecto. Para las pruebas, conviene contar con que puede aparecer una fila en `rag_evaluations` después de responder.
 
+**Estado: ✅ corregido (2026-09-15)**, junto con `DOC-02`, como recomienda el parche. Cambios en `evaluator.py`:
+
+- `max_tokens` pasa de 300 a 1024.
+- `reasoning` queda acotado con `max_length=600` y una descripción que pide como máximo tres frases.
+- `max_retries=3` explícito. Instructor 1.16 ya hacía 3 intentos por defecto en `AsyncInstructor.create`, que es lo que devuelve `from_anthropic`; se fija para no depender de lo que traiga otra versión.
+
+Verificado con el juez real (Claude Haiku). Se tomaron 5 preguntas del corpus, con 10 documentos de contexto recuperados y re-rankeados y la respuesta real del redactor, generados una vez y compartidos. Cada pregunta se evaluó 3 veces con el evaluador anterior (`e711924`) y 3 con el nuevo, alternando:
+
+| | Antes | Después |
+|---|:---:|:---:|
+| Evaluaciones guardadas | 5/15 | **15/15** |
+| Perdidas por truncado (`max_tokens`) | **10/15** | 0 |
+| `reasoning` guardado (mediana / máximo) | 746 / 785 caracteres | 438 / 564 caracteres |
+
+Todas las puntuaciones nuevas están en [0, 1], y la base se devolvió a su estado inicial.
+
+**Precisión a la observación de arriba.** Con un contexto realista de 10 documentos, la pérdida no era ocasional: afectaba a **dos de cada tres** evaluaciones. Las pocas que se guardaban llevaban razonamientos de hasta 785 caracteres, al borde de lo que cabía en 300 tokens junto al JSON.
+
+Queda sin aplicar la recomendación transversal: registrar con `logging` en lugar de `print` en `evaluator.py`, `memory.py` y `graphrag.py`.
+
 ---
 
 ## 7. Divergencias entre Documentación y Código
@@ -2148,6 +2170,14 @@ grep -n "ge=\|le=" src/models/structured.py     # 11: ge=0.0, le=1.0
 ```
 
 Con esto, Instructor detecta la `ValidationError` y **reintenta inyectando el error al modelo** —el comportamiento de auto-corrección que `ARCHITECTURE.md` §4 describe para el extractor— en lugar de perder el registro. El `CHECK` de SQL pasa a ser la segunda línea de defensa que debía ser.
+
+**Estado: ✅ corregido (2026-09-15)**, en el mismo cambio que `PERF-04`. Las tres puntuaciones de `RAGEvaluation` llevan `ge=0.0, le=1.0`. El código hace ahora lo que afirma `PAPER.md` §5.6, así que el paper no necesita cambios.
+
+Verificado sin LLM, con `faithfulness_score=1.2`:
+- **Antes:** el esquema lo acepta, y el `INSERT` real en `rag_evaluations` falla por el `CHECK`. Es la ruta de pérdida silenciosa descrita arriba.
+- **Después:** el esquema lo rechaza con `ValidationError` antes de llegar a SQL, donde Instructor puede reintentar.
+
+En las 15 evaluaciones reales de la verificación de `PERF-04` no apareció ninguna puntuación fuera de rango, así que el reintento por rango no llegó a observarse en la práctica.
 
 ---
 
@@ -2732,8 +2762,8 @@ Ordenado por relación impacto/esfuerzo. Las estimaciones son de implementación
 | 0 — Desbloqueo | ✅ cerrado (`BUG-08`) |
 | 1 — Seguridad | ✅ cerrado (`SEC-01` a `SEC-04`) |
 | 2 — Corrección funcional | ✅ cerrado (`BUG-01` a `BUG-06`, más `BUG-09`) |
-| 3 — Rendimiento | ⬜ en curso: `PERF-01`, `PERF-02` y `PERF-03` corregidos (2026-09-15); queda `PERF-04` |
-| 4 — Reconciliación documental | ⬜ abierto (`DOC-01` ya corregido) |
+| 3 — Rendimiento | ✅ cerrado (`PERF-01` a `PERF-04`, 2026-09-15) |
+| 4 — Reconciliación documental | ⬜ abierto (`DOC-01` y `DOC-02` ya corregidos) |
 | 5 — Higiene y cobertura | ⬜ abierto |
 
 Los hallazgos posteriores a la foto, con el bloque en que encajan:
