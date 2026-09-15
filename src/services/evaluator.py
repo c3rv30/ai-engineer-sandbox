@@ -1,14 +1,12 @@
 import os
 import uuid
 import asyncio
-import asyncpg
 import instructor
 from pydantic import BaseModel, Field
 from typing import List
 from anthropic import AsyncAnthropic
 from src.models.search import SearchResult
-
-DB_DSN = os.getenv("DATABASE_URL", "postgresql://app_user:apppassword@localhost:5433/postgres")
+from src.services.db import tenant_connection
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 client = instructor.from_anthropic(anthropic_client)
 
@@ -64,9 +62,7 @@ async def evaluate_rag_response(tenant_id: uuid.UUID, query: str, answer: str, c
         )
         
         # Guardar en PostgreSQL
-        conn = await asyncpg.connect(DB_DSN)
-        try:
-            await conn.execute(f"SET app.current_tenant = '{tenant_id}'")
+        async with tenant_connection(tenant_id) as conn:
             sql = """
             INSERT INTO rag_evaluations (tenant_id, query, faithfulness_score, relevance_score, context_precision_score, reasoning)
             VALUES ($1, $2, $3, $4, $5, $6)
@@ -81,8 +77,6 @@ async def evaluate_rag_response(tenant_id: uuid.UUID, query: str, answer: str, c
                 evaluation.reasoning
             )
             print(f"✅ [Evaluator] Evaluación guardada: Fidelidad={evaluation.faithfulness_score} | Relevancia={evaluation.relevance_score} | Contexto={evaluation.context_precision_score}")
-        finally:
-            await conn.close()
             
     except Exception as e:
         print(f"⚠️ [Evaluator] Error durante la evaluación: {e}")

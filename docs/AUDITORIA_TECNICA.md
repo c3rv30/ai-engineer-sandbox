@@ -88,7 +88,8 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `BUG-04` | ✅ corregido | 2026-09-14 | `00_create_app_user` → `01_init` completo; `apply_*` a `sql/migrations/`; healthcheck por TCP. Desde volumen vacío: `exit=3` → `healthy`. Catálogo idéntico al de desarrollo (77/77), RLS 7/7, app real 6/6 |
 | `BUG-06` | ✅ corregido | 2026-09-14 | `top_k` propagados hasta el investigador, con valores por defecto únicos (15/10), límites de rango y sin caché cuando difieren. Contra servidor real: 3/8 → 8/8; fuera de rango 200 → 422 |
 | `BUG-05` | ✅ corregido | 2026-09-14 | Opción (a): cada reintento amplía la ventana (15/10 → 30/15, con tope en los máximos de la API) y no se reintenta si ampliar no puede aportar nada. Contra servidor real: 3/7 → 7/7; reintentos idénticos 3 → 0 |
-| Los otros 16 de la foto | ⬜ abiertos | — | — |
+| `PERF-01` | ✅ corregido | 2026-09-15 | Pool único en `db.py` y `set_config` local a la transacción. Conexiones por consulta 8 → 0; 25 consultas concurrentes: 7 `TooManyConnectionsError` → 0; aislamiento verificado con pool de 2 |
+| Los otros 15 de la foto | ⬜ abiertos | — | — |
 | `SEC-05`, `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
@@ -105,6 +106,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`BUG-02`**: el caché no solo servía datos viejos, sino datos de otra consulta (el precio de bitcoin a quien preguntaba por ethereum). `out_of_scope` no es inocuo. Desde la corrección de `BUG-09`, `/chat/stream/` también cacheaba herramientas.
 - **`BUG-04`**: `FORCE ROW LEVEL SECURITY` no protege el DSN de `postgres` de `.env.example`, porque un superusuario elude RLS con o sin `FORCE`.
 - **`PERF-04`**: el evaluador falla de forma intermitente, no siempre. El mensaje del commit `d198be1` (`BUG-02`) dice lo contrario y es incorrecto.
+- **`PERF-01`**: la fuga entre tenants que se temía al reutilizar conexiones no llegaría a producirse con asyncpg 0.31, cuyo `RESET ALL` al devolver una conexión borra el tenant de sesión (medido). Con un reset vacío la fuga sí aparece. Tampoco era cierto que los nueve accesos usaran `app_user`: `ingestion.py` usaba por defecto el superusuario.
 
 ---
 
@@ -427,6 +429,8 @@ await conn.execute("SELECT set_config('app.current_tenant', $1, false)", str(ten
 `set_config()` es una función SQL normal y acepta parámetros vinculados, eliminando la interpolación por completo en los nueve puntos. Es la corrección definitiva.
 
 **Estado: ✅ corregido (2026-09-11).** `User.tenant_id` pasa a tiparse como `uuid.UUID`, de modo que Pydantic rechaza en el borde cualquier valor capaz de transportar SQL: un `tenant_id` malicioso en el token devuelve 401 en lugar de llegar al `SET`. La firma de las nueve funciones aguas abajo se actualizó a `uuid.UUID`, y `ingest.py` valida el argumento `--tenant` con `type=uuid.UUID`. Verificado el aislamiento RLS contra la base real. La defensa en profundidad con `set_config()` queda pendiente.
+
+**Actualización (2026-09-15, con `PERF-01`).** La defensa en profundidad queda aplicada. Ninguna consulta interpola ya el tenant: `tenant_connection()` (`src/services/db.py`) lo fija como parámetro con `set_config('app.current_tenant', $1, true)`, local a una transacción, y es el único punto del código que lo hace. Lo que sigue abierto es que una sentencia inyectada pueda reescribirlo (`SEC-05`), algo que un parámetro no evita.
 
 ---
 
@@ -1665,6 +1669,42 @@ Dos defensas, aplicar ambas:
 
 Este punto es la razón por la que `PERF-01` y `SEC-02` deben resolverse en el mismo cambio, no por separado.
 
+**Estado: ✅ corregido (2026-09-15).** Hay un módulo nuevo, `src/services/db.py`, por el que pasan los nueve puntos de acceso a datos. En `src/` ya no queda ningún `asyncpg.connect` ni `SET app.current_tenant`.
+
+- **Pool único por proceso** (`get_pool()`), de 5 a 20 conexiones, configurable con `DB_POOL_MIN_SIZE` y `DB_POOL_MAX_SIZE`. `main.py` lo precalienta en el `lifespan` (sin impedir el arranque si Postgres no está) y lo cierra al apagar.
+- **`tenant_connection(tenant_id)`**: toma una conexión del pool, abre una transacción y fija el tenant como parámetro con `set_config('app.current_tenant', $1, true)`. Es también la defensa en profundidad pendiente de `SEC-02`.
+- **Los embeddings se calculan antes de tomar conexión** en `retriever.py`, `cache.py` y `memory.py`. Antes se abría la conexión y luego se hacía el trabajo de CPU, con la conexión retenida sin usarse.
+
+Ajustes respecto al parche de arriba:
+
+- **El pool se crea bajo demanda y queda ligado al event loop**, no solo en el `lifespan`, porque también lo usan la CLI de ingesta y los scripts. La CLI lo cierra al terminar.
+- **Solo hacía falta la defensa 1.** La defensa 2 ya la da asyncpg: desde 0.30 ejecuta `RESET ALL` al devolver cada conexión al pool (`Connection.get_reset_query`). Se midió con un tenant fijado a nivel de sesión, como hacía el código viejo, sobre un pool de una sola conexión. Con el reset por defecto, la petición siguiente no ve el tenant (0 filas). Con un reset vacío, **sí lo ve**: 128 tripletas ajenas. El `set_config` local a la transacción no depende de ese comportamiento.
+- **Hallazgo de paso.** `ingestion.py` tenía como DSN por defecto el del superusuario `postgres`. Si faltaba `DATABASE_URL`, la ingesta eludía RLS. Con un DSN único, el valor por defecto pasa a ser `app_user`.
+
+Verificado contra Postgres real. El código anterior son las copias exactas de HEAD (`38d6f34`) de los seis servicios, ejecutadas en el mismo proceso que los nuevos. La "ruta de lectura" son las lecturas de una `knowledge_search`: caché, memoria, las 5 búsquedas en paralelo y el grafo.
+
+| Medida | Antes | Después |
+|---|:---:|:---:|
+| Conexiones nuevas por consulta (`pg_stat_database.sessions`, 10 consultas) | **8** | **0** |
+| Mediana de la ruta de lectura | 206 ms | **76 ms** |
+| 25 consultas concurrentes: pico de conexiones de `app_user` | 95 de 97 disponibles | **13** |
+| Ídem: errores | **7 `TooManyConnectionsError`** | **0** |
+| Ídem: duración total | 3,6 s | 1,7 s |
+
+El log de Postgres registra, en el instante de la ráfaga del código viejo, decenas de `FATAL: sorry, too many clients already`.
+
+Aislamiento, con el pool forzado a 2 conexiones para obligar a reutilizarlas entre tenants:
+- 200 operaciones intercaladas de dos tenants y 60 `retrieve_subgraph` concurrentes: todas ven solo lo suyo.
+- Una conexión recién devuelta al pool no conserva el tenant anterior (20 de 20).
+- Con los dos tenants, caché, memoria, las 5 búsquedas y el grafo devuelven lo mismo que en HEAD.
+
+Aplicación real (uvicorn, LLM y Postgres):
+- Chat por stream (141 eventos), ingesta por API y background tasks, sin abrir **ninguna** conexión nueva en el servidor.
+- Ingesta por CLI con el pool creado bajo demanda.
+- Todo bajo el tenant correcto, y la base devuelta a su estado inicial.
+
+**Límites.** La mejora de latencia es la de la ruta de base de datos en local, sobre loopback; el tiempo total de una pregunta lo siguen dominando el LLM y el re-ranking. Cerrar el pool en la CLI es higiene: sin ese cierre no apareció ningún aviso, ni con `python -X dev`, ni ningún `unexpected EOF` en el servidor.
+
 ---
 
 ### `PERF-02` 🟠 Cuatro copias del modelo de embeddings en RAM
@@ -2640,7 +2680,7 @@ Ordenado por relación impacto/esfuerzo. Las estimaciones son de implementación
 | 0 — Desbloqueo | ✅ cerrado (`BUG-08`) |
 | 1 — Seguridad | ✅ cerrado (`SEC-01` a `SEC-04`) |
 | 2 — Corrección funcional | ✅ cerrado (`BUG-01` a `BUG-06`, más `BUG-09`) |
-| 3 — Rendimiento | ⬜ abierto; es el siguiente |
+| 3 — Rendimiento | ⬜ en curso: `PERF-01` corregido (2026-09-15); quedan `PERF-02`, `PERF-03` y `PERF-04` |
 | 4 — Reconciliación documental | ⬜ abierto (`DOC-01` ya corregido) |
 | 5 — Higiene y cobertura | ⬜ abierto |
 

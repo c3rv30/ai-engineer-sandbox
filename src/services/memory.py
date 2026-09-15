@@ -1,15 +1,15 @@
 import os
 import uuid
 import asyncio
-import asyncpg
 import instructor
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
+from src.services.db import tenant_connection
+
 load_dotenv()
-DB_DSN = os.getenv("DATABASE_URL", "postgresql://app_user:apppassword@localhost:5433/postgres")
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 model = SentenceTransformer(EMBEDDING_MODEL)
 
@@ -46,12 +46,12 @@ async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
             
         print(f"🧠 [Memory] Nuevos hechos detectados: {extraction.new_facts}")
         
-        conn = await asyncpg.connect(DB_DSN)
-        try:
-            await conn.execute(f"SET app.current_tenant = '{tenant_id}'")
+        # Los embeddings se calculan antes de tomar conexión: es trabajo de CPU y
+        # retendría una conexión del pool sin usarla.
+        embeddings = [await asyncio.to_thread(model.encode, fact) for fact in extraction.new_facts]
+        async with tenant_connection(tenant_id) as conn:
             
-            for fact in extraction.new_facts:
-                fact_embedding = await asyncio.to_thread(model.encode, fact)
+            for fact, fact_embedding in zip(extraction.new_facts, embeddings):
                 emb_str = f"[{','.join(str(x) for x in fact_embedding.tolist())}]"
                 
                 sql = """
@@ -59,8 +59,6 @@ async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
                 VALUES ($1, $2, $3::vector)
                 """
                 await conn.execute(sql, tenant_id, fact, emb_str)
-        finally:
-            await conn.close()
     except Exception as e:
         print(f"Error extrayendo memoria: {e}")
 
@@ -68,12 +66,12 @@ async def retrieve_user_facts(tenant_id: uuid.UUID, query: str, top_k: int = 3) 
     """
     Busca los hechos más relevantes del usuario basados en su pregunta actual.
     """
-    conn = await asyncpg.connect(DB_DSN)
-    try:
-        await conn.execute(f"SET app.current_tenant = '{tenant_id}'")
+    # El embedding se calcula antes de tomar conexión: es trabajo de CPU y retendría
+    # una conexión del pool sin usarla.
+    query_embedding = await asyncio.to_thread(model.encode, query)
+    emb_str = f"[{','.join(str(x) for x in query_embedding.tolist())}]"
+    async with tenant_connection(tenant_id) as conn:
         
-        query_embedding = await asyncio.to_thread(model.encode, query)
-        emb_str = f"[{','.join(str(x) for x in query_embedding.tolist())}]"
         
         sql = """
         SELECT fact, 1 - (fact_embedding <=> $1::vector) AS similarity
@@ -94,5 +92,3 @@ async def retrieve_user_facts(tenant_id: uuid.UUID, query: str, top_k: int = 3) 
             
         facts_str = "\n".join(f"- {f}" for f in relevant_facts)
         return f"<USER_PROFILE>\nInformación histórica conocida sobre el usuario:\n{facts_str}\n</USER_PROFILE>\n\n"
-    finally:
-        await conn.close()

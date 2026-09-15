@@ -36,9 +36,9 @@ class Token(BaseModel):
 
 class User(BaseModel):
     username: str
-    # El tenant_id se interpola en 'SET app.current_tenant' en la capa de datos.
-    # Tiparlo como UUID hace que Pydantic rechace en el borde cualquier valor que
-    # pudiera transportar SQL, y garantiza la forma canónica aguas abajo.
+    # El tenant_id fija app.current_tenant en la capa de datos (src/services/db.py).
+    # Tiparlo como UUID hace que Pydantic rechace en el borde cualquier valor malformado
+    # antes de que llegue ahí, y garantiza la forma canónica aguas abajo.
     tenant_id: uuid.UUID
 
 # Mock Database of users

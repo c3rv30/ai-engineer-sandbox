@@ -5,11 +5,11 @@ from typing import List, Dict
 from pydantic import BaseModel
 import instructor
 from anthropic import AsyncAnthropic
-import asyncpg
 from dotenv import load_dotenv
 
+from src.services.db import tenant_connection
+
 load_dotenv()
-DB_DSN = os.getenv("DATABASE_URL", "postgresql://app_user:apppassword@localhost:5433/postgres")
 
 class Triplet(BaseModel):
     source_node: str
@@ -49,23 +49,17 @@ async def insert_knowledge_graph(tenant_id: uuid.UUID, chunk_id: str, triplets: 
     if not triplets:
         return
         
-    conn = await asyncpg.connect(DB_DSN)
-    try:
-        await conn.execute(f"SET app.current_tenant = '{tenant_id}'")
+    async with tenant_connection(tenant_id) as conn:
         insert_query = """
         INSERT INTO knowledge_graph (tenant_id, source_node, relation, target_node, source_chunk_id)
         VALUES ($1, $2, $3, $4, $5)
         """
         records = [(tenant_id, t.source_node.lower(), t.relation.lower(), t.target_node.lower(), chunk_id) for t in triplets]
         await conn.executemany(insert_query, records)
-    finally:
-        await conn.close()
 
 async def retrieve_subgraph(tenant_id: uuid.UUID, query: str) -> str:
     """Busca en el grafo de conocimiento nodos relevantes a la query de forma difusa."""
-    conn = await asyncpg.connect(DB_DSN)
-    try:
-        await conn.execute(f"SET app.current_tenant = '{tenant_id}'")
+    async with tenant_connection(tenant_id) as conn:
         
         # Extraemos palabras clave de la query para buscar nodos en el grafo
         # Esto es un naive approach, idealmente usaríamos el LLM para extraer las entidades de la pregunta.
@@ -96,5 +90,3 @@ async def retrieve_subgraph(tenant_id: uuid.UUID, query: str) -> str:
             graph_text += f"- [{r['source_node']}] --({r['relation']})--> [{r['target_node']}]\n"
             
         return graph_text
-    finally:
-        await conn.close()

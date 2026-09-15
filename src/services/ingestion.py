@@ -8,7 +8,6 @@ from typing import List, Dict, Any
 
 from pydantic import BaseModel, Field
 import tiktoken
-import asyncpg
 import fitz  # PyMuPDF
 from anthropic import AsyncAnthropic
 from langfuse import observe
@@ -19,7 +18,6 @@ load_dotenv()
 
 # Configuración
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-DB_DSN = os.getenv("DATABASE_URL", "postgresql://postgres:postgrespassword@localhost:5433/postgres")
 
 print(f"Cargando modelo local {EMBEDDING_MODEL} (esto puede tomar un momento la primera vez)...")
 model = SentenceTransformer(EMBEDDING_MODEL)
@@ -176,15 +174,14 @@ async def generate_embeddings(chunks: List[DocumentChunk]) -> List[DocumentChunk
     return chunks
 
 from src.services.graphrag import extract_knowledge_graph, insert_knowledge_graph
+from src.services.db import close_pool, tenant_connection
 
 @observe(name="insert_documents_db")
 async def insert_documents(chunks: List[DocumentChunk], source: str, tenant_id: uuid.UUID) -> List[str]:
     """Inserta chunks y devuelve los IDs generados."""
     if not chunks:
         return []
-    conn = await asyncpg.connect(DB_DSN)
-    try:
-        await conn.execute(f"SET app.current_tenant = '{tenant_id}'")
+    async with tenant_connection(tenant_id) as conn:
         insert_query = """
         INSERT INTO documents (tenant_id, content, embedding, metadata)
         VALUES ($1, $2, $3::vector, $4)
@@ -205,8 +202,6 @@ async def insert_documents(chunks: List[DocumentChunk], source: str, tenant_id: 
             ids.append(str(row_id))
             
         return ids
-    finally:
-        await conn.close()
 
 @observe(name="ingestion_pipeline")
 async def ingest_file(file_path: str, tenant_id: uuid.UUID, source: str | None = None) -> IngestionResult:
@@ -267,7 +262,12 @@ async def main():
     if not os.path.exists(args.file):
         print(f"Error: El archivo '{args.file}' no existe.")
         return
-    await ingest_file(args.file, args.tenant)
+    try:
+        await ingest_file(args.file, args.tenant)
+    finally:
+        # Cierra las conexiones del pool antes de que asyncio.run cierre el loop; si no,
+        # el proceso termina cortándolas sin despedirse del servidor.
+        await close_pool()
 
 if __name__ == "__main__":
     asyncio.run(main())
