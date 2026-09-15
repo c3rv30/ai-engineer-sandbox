@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 import asyncio
 import json
+import logging
+import uuid
 
 from src.models.requests import ChatRequest, DEFAULT_TOP_K_RETRIEVE, DEFAULT_TOP_K_RERANK
 from src.models.structured import StructuredAnswer
@@ -16,6 +18,11 @@ from src.services.agent_graph.graph import build_graph
 from src.services.agent_graph.state import AgentState
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+
+# El texto de una excepción interna no se le devuelve al cliente (SEC-06): traía rutas
+# del servidor y mensajes del SDK de Anthropic. Va al log, y al cliente solo un
+# identificador con el que correlacionarlo.
+logger = logging.getLogger(__name__)
 
 # Solo se cachean respuestas que sigan valiendo la próxima vez que alguien pregunte
 # algo parecido. El caché se consulta antes que el supervisor y compara por similitud,
@@ -92,8 +99,15 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
 
         return structured_response
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        # El 500 de "el grafo no devolvió una respuesta final" lo levanta este mismo
+        # bloque y ya trae un mensaje pensado para el cliente. Sin este caso, el
+        # except genérico lo reenvolvería y perdería ese detalle.
+        raise
+    except Exception:
+        error_id = uuid.uuid4().hex[:8]
+        logger.exception("Fallo en POST /chat/ [%s]", error_id)
+        raise HTTPException(status_code=500, detail=f"Error interno ({error_id})")
 
 
 @router.post("/stream/")
@@ -178,7 +192,10 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
             if retrieved_docs and final_dict:
                 background_tasks.add_task(evaluate_rag_response, current_user.tenant_id, request.query, final_dict.get("answer", ""), retrieved_docs)
 
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        except Exception:
+            # La clave 'error' se mantiene: es la que renderiza el frontend.
+            error_id = uuid.uuid4().hex[:8]
+            logger.exception("Fallo en POST /chat/stream/ [%s]", error_id)
+            yield f"data: {json.dumps({'error': f'Error interno ({error_id})'})}\n\n"
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")

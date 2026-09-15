@@ -94,9 +94,10 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `PERF-03` | ✅ corregido | 2026-09-15 | `chunk_text` y herramientas en `asyncio.to_thread`. Espera máxima de `/health`: ingesta 1182 → 21 ms, herramienta 204 → 14 ms; PDF de 20 páginas: parada del event loop 1060 → 16 ms, mismos fragmentos |
 | `PERF-04` | ✅ corregido | 2026-09-15 | `max_tokens` 300 → 1024, `reasoning` ≤ 600 caracteres y `max_retries=3` explícito. Juez real, 15 evaluaciones por variante: perdidas 10/15 → 0/15 |
 | `DOC-02` | ✅ corregido | 2026-09-15 | `ge`/`le` en las tres puntuaciones de `RAGEvaluation`: un 1,2 falla en Pydantic (reintentable) y no en el `CHECK` de SQL (pérdida silenciosa). Con `PERF-04` |
+| `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | Los otros 11 de la foto | ⬜ abiertos | — | — |
-| `SEC-06`, `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
+| `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 | `HYG-07` | ⬜ abierto | 2026-09-15 | Hallazgo nuevo, encontrado al corregir `SEC-05`; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
@@ -723,6 +724,22 @@ except Exception:
 ```
 
 Los `HTTPException` con 400 o 422 son mensajes pensados para el cliente y se quedan igual. En `chat_endpoint`, el `except Exception` también captura y reenvuelve el `HTTPException` que el propio bloque lanza cuando el grafo no devuelve respuesta. Conviene dejar pasar `HTTPException` antes del caso genérico.
+
+**Estado:** ✅ corregido el 2026-09-15.
+
+Los tres puntos registran la excepción con `logger.exception` —el proyecto no usaba `logging` en ninguna parte; es su primer uso, y convive con los `print` del resto— y devuelven al cliente `Error interno (<id>)` con ocho caracteres hexadecimales. La clave `error` del evento SSE se mantiene, porque es la que renderiza `src/frontend/app.py:112`, igual que `detail` para la línea 53.
+
+Verificación contra servidor real, forzando fallos de verdad (clave de Anthropic inválida y un PDF corrupto):
+
+| Punto | Antes recibía el cliente | Después |
+|---|---|---|
+| `POST /chat/` | `Error code: 401 - {'type': 'error', ... 'message': 'API key is invalid.'}` | `Error interno (a85a8af2)` |
+| `POST /chat/stream/` | el mismo 401, dentro de un HTTP 200 | `Error interno (e1942c67)` |
+| `POST /ingest/` | `Failed to open file '/var/folders/v2/n7jcjy_.../tmp_f3a0h9w.pdf' as type pdf.` | `Error interno (81fa55bd)` |
+
+Los tres identificadores aparecen exactamente una vez en el log del servidor, cada uno junto a su traza completa (`ERROR:src.api.routers.chat:Fallo en POST /chat/ [a85a8af2]`), y la ruta del temporal ya solo existe ahí. `grep -rn "str(e)" src/api` no devuelve nada.
+
+Lo que no debía cambiar, comprobado aparte: el 400 de extensión no permitida llega íntegro (`Extensión no permitida. Soportadas: {...}`), y el 500 propio del router conserva su mensaje (`El Grafo de Agentes no devolvió una respuesta final.`) gracias al `except HTTPException: raise` que ahora precede al genérico. Este segundo caso vive entero en el router, así que se provocó sustituyendo el grafo por un doble que devuelve un estado sin `final_answer`.
 
 ---
 
@@ -2832,7 +2849,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 |:---:|---|---|:---:|:---:|
 | 29 | ✅ hecho (2026-09-15). Contexto de tenant firmado con HMAC, verificado por una función `SECURITY DEFINER` | `SEC-05` | 3, con el paso 12 | 2–4 h |
 | 34 | Acotar el `ALTER DEFAULT PRIVILEGES` sobre `public` a las cinco tablas de la aplicación | `HYG-07` | 5 | 15 min |
-| 30 | Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
+| 30 | ✅ hecho (2026-09-15). Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
 | 31 | No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
 | 33 | `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |

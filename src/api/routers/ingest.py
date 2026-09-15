@@ -1,11 +1,17 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+import logging
 import os
 import shutil
 import tempfile
+import uuid
 from src.services.ingestion import ingest_file, IngestionResult
 from src.api.auth import get_current_user, User
 
 router = APIRouter(prefix="/ingest", tags=["Ingestion"])
+
+# El texto de una excepción interna no se le devuelve al cliente (SEC-06): un PDF
+# ilegible hacía que el 500 incluyera la ruta absoluta del temporal del servidor.
+logger = logging.getLogger(__name__)
 
 # Archivos permitidos para evitar vulnerabilidades
 ALLOWED_EXTENSIONS = {".md", ".txt", ".pdf", ".png", ".jpg", ".jpeg"}
@@ -35,8 +41,12 @@ async def ingest_endpoint(file: UploadFile = File(...), current_user: User = Dep
         result = await ingest_file(temp_file_path, current_user.tenant_id, source=source_name)
         return result
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # El 400 de extensión no permitida se levanta antes del try: sigue llegando
+        # íntegro al cliente, como debe, porque es un mensaje escrito para él.
+        error_id = uuid.uuid4().hex[:8]
+        logger.exception("Fallo en POST /ingest/ [%s]", error_id)
+        raise HTTPException(status_code=500, detail=f"Error interno ({error_id})")
     finally:
         # 4. Limpieza: Borrar el archivo temporal
         if temp_file_path and os.path.exists(temp_file_path):
