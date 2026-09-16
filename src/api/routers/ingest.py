@@ -6,6 +6,7 @@ import tempfile
 import uuid
 from src.services.ingestion import ingest_file, IngestionResult
 from src.api.auth import get_current_user, User
+from src.services.filenames import source_name
 
 router = APIRouter(prefix="/ingest", tags=["Ingestion"])
 
@@ -29,7 +30,7 @@ async def ingest_endpoint(file: UploadFile = File(...), current_user: User = Dep
     # '../' escribiría (y el finally borraría) fuera del directorio temporal, y dos
     # subidas simultáneas con el mismo nombre compartirían archivo entre tenants.
     # A disco va con un nombre aleatorio; el original solo se conserva como metadato.
-    source_name = os.path.basename(file.filename.replace("\\", "/"))
+    origin = source_name(file.filename)
     temp_file_path = None
 
     try:
@@ -38,7 +39,7 @@ async def ingest_endpoint(file: UploadFile = File(...), current_user: User = Dep
             shutil.copyfileobj(file.file, buffer)
 
         # 3. Llamar al motor de ingestión con RLS
-        result = await ingest_file(temp_file_path, current_user.tenant_id, source=source_name)
+        result = await ingest_file(temp_file_path, current_user.tenant_id, source=origin)
         return result
 
     except Exception:

@@ -7,7 +7,7 @@ petición parecida.
 import pytest
 from pydantic import ValidationError
 
-from src.api.routers.chat import is_cacheable, is_cache_eligible, uses_default_retrieval
+from src.services.cache_policy import is_cacheable, is_cache_eligible, uses_default_retrieval
 from src.models.requests import ChatRequest
 
 BUENA = {"requires_more_info": False, "confidence_score": 0.9}

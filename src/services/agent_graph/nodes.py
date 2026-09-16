@@ -11,9 +11,8 @@ from src.services.extractor import generate_answer, generate_answer_stream
 from src.services.tools import TOOLS_REGISTRY
 from src.models.search import SearchResult
 from src.models.structured import StructuredAnswer
-from src.models.requests import (
-    DEFAULT_TOP_K_RETRIEVE, DEFAULT_TOP_K_RERANK, MAX_TOP_K_RETRIEVE, MAX_TOP_K_RERANK,
-)
+from src.models.requests import DEFAULT_TOP_K_RETRIEVE, DEFAULT_TOP_K_RERANK
+from src.services.agent_graph.routing import is_retrieval_exhausted, retrieval_window
 
 async def supervisor_node(state: AgentState) -> dict:
     """
@@ -65,18 +64,6 @@ async def supervisor_node(state: AgentState) -> dict:
         "iterations": state.get("iterations", 0)
     }
 
-def retrieval_window(base_retrieve: int, base_rerank: int, iteration: int) -> tuple[int, int]:
-    """Candidatos por variante y documentos tras el re-ranking para la pasada `iteration` (0 = la primera).
-
-    Un reintento del ciclo de auto-corrección llega porque el redactor dijo que el
-    contexto no le bastaba, y repetir la misma búsqueda devolvería exactamente lo mismo
-    (BUG-05). En cada reintento se multiplican los candidatos y se deja pasar la mitad
-    más de documentos (redondeando hacia arriba), sin superar los máximos de la API.
-    """
-    retrieve_k = min(base_retrieve * (iteration + 1), MAX_TOP_K_RETRIEVE)
-    rerank_k = min(base_rerank + (base_rerank + 1) // 2 * iteration, MAX_TOP_K_RERANK)
-    return retrieve_k, rerank_k
-
 async def researcher_node(state: AgentState) -> dict:
     """
     Se encarga de buscar en Postgres Vector y GraphRAG.
@@ -119,17 +106,12 @@ async def researcher_node(state: AgentState) -> dict:
             score=1.0
         ))
         
-    # Reintentar solo tiene sentido si una ventana más amplia puede cambiar el contexto.
-    # No puede si ninguna búsqueda llenó su cupo (el corpus no tiene más candidatos) y el
-    # redactor ya los recibió todos, ni si la ventana siguiente es igual por los máximos.
-    corpus_exhausted = (all(len(r) < top_k_retrieve for r in results_lists)
-                        and len(unique_candidates) <= top_k_rerank)
-    window_saturated = retrieval_window(base_retrieve, base_rerank, iteration + 1) == (top_k_retrieve, top_k_rerank)
-
     return {
         "documents": best_results,
         "iterations": state["iterations"] + 1,
-        "retrieval_exhausted": corpus_exhausted or window_saturated,
+        "retrieval_exhausted": is_retrieval_exhausted(
+            [len(r) for r in results_lists], len(unique_candidates), base_retrieve, base_rerank, iteration,
+        ),
     }
 
 async def generator_node(state: AgentState) -> dict:

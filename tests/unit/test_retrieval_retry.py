@@ -6,8 +6,9 @@ ventana, y no debe reintentarse cuando ampliarla no puede cambiar el contexto.
 """
 import pytest
 
-from src.services.agent_graph.graph import route_reviewer, route_supervisor
-from src.services.agent_graph.nodes import retrieval_window
+from src.services.agent_graph.routing import (
+    is_retrieval_exhausted, retrieval_window, route_reviewer, route_supervisor,
+)
 
 
 # --- Ventana de recuperación ---
@@ -34,6 +35,38 @@ def test_tope_en_los_maximos_de_la_api(base, iteracion):
 def test_la_ventana_se_estanca_en_los_maximos():
     assert retrieval_window(15, 10, 3) == (50, 20)
     assert retrieval_window(15, 10, 10) == (50, 20)
+
+
+# --- Agotamiento: cuándo ampliar no puede cambiar el contexto ---
+
+def test_corpus_agotado():
+    # Pasada 0 con base 15/10: ninguna variante llenó sus 15 candidatos, y los 8 únicos
+    # ya llegaron todos al redactor (8 <= 10).
+    assert is_retrieval_exhausted([8, 5, 3], 8, 15, 10, 0)
+
+
+def test_no_agotado_si_alguna_busqueda_lleno_su_cupo():
+    # Una variante devolvió los 15: puede haber más candidatos en el corpus.
+    assert not is_retrieval_exhausted([15, 5, 3], 8, 15, 10, 0)
+
+
+def test_no_agotado_si_quedaron_candidatos_fuera_del_redactor():
+    # 12 únicos, pero solo 10 pasaron el re-ranking: ampliar dejaría pasar más.
+    assert not is_retrieval_exhausted([12, 4, 2], 12, 15, 10, 0)
+
+
+def test_sin_variantes_y_sin_candidatos():
+    assert is_retrieval_exhausted([], 0, 15, 10, 0)
+
+
+def test_ventana_saturada():
+    # En la pasada 3, la ventana ya es 50/20 y la siguiente sería igual.
+    assert retrieval_window(15, 10, 3) == retrieval_window(15, 10, 4) == (50, 20)
+    assert is_retrieval_exhausted([50, 50, 50], 150, 15, 10, 3)
+
+
+def test_ventana_con_margen_no_saturada():
+    assert not is_retrieval_exhausted([15, 15, 15], 45, 15, 10, 0)
 
 
 # --- Decisión del revisor ---

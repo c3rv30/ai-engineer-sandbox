@@ -6,7 +6,7 @@ reintenta, y no en el CHECK de SQL, donde la evaluación se perdía sin avisar.
 import pytest
 from pydantic import ValidationError
 
-from src.services.evaluator import RAGEvaluation
+from src.models.evaluation import RAGEvaluation
 
 VALIDA = {
     "faithfulness_score": 0.8,
