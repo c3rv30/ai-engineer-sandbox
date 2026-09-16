@@ -95,13 +95,13 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `PERF-03` | ✅ corregido | 2026-09-15 | `chunk_text` y herramientas en `asyncio.to_thread`. Espera máxima de `/health`: ingesta 1182 → 21 ms, herramienta 204 → 14 ms; PDF de 20 páginas: parada del event loop 1060 → 16 ms, mismos fragmentos |
 | `PERF-04` | ✅ corregido | 2026-09-15 | `max_tokens` 300 → 1024, `reasoning` ≤ 600 caracteres y `max_retries=3` explícito. Juez real, 15 evaluaciones por variante: perdidas 10/15 → 0/15 |
 | `DOC-02` | ✅ corregido | 2026-09-15 | `ge`/`le` en las tres puntuaciones de `RAGEvaluation`: un 1,2 falla en Pydantic (reintentable) y no en el `CHECK` de SQL (pérdida silenciosa). Con `PERF-04` |
+| `HYG-08` | ✅ corregido | 2026-09-16 | Volumen nombrado `pgdata`, con la base de desarrollo migrada sin pérdidas (copia en frío, `diff -r` sin diferencias). Control negativo con `compose down` + `up`: con el compose anterior, la fila marca desaparece y el volumen queda huérfano; con el nuevo, sobrevive |
 | `BUG-10` | ✅ corregido | 2026-09-16 | Reproducido primero de extremo a extremo (le faltaba): el seguimiento de una conversación sobre Itaú/Kabeli recibía **literalmente** la respuesta de otra sobre MisterGas. Con el parche, cada una responde su propio referente y el caché no registra ningún acierto indebido |
 | `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | Los otros 11 de la foto | ⬜ abiertos | — | — |
 | `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 | `HYG-07` | ⬜ abierto | 2026-09-15 | Hallazgo nuevo, encontrado al corregir `SEC-05`; ver §2 y el plan (§10) |
-| `HYG-08` | ⬜ abierto | 2026-09-16 | Hallazgo nuevo: los datos viven en un volumen anónimo; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
 
@@ -2861,6 +2861,24 @@ volumes:
 
 **Atención al aplicarlo:** el cambio no migra nada. Al levantar con el volumen nombrado, Postgres arranca sobre un volumen vacío, ejecuta los scripts de inicialización y la base de desarrollo actual —22 documentos, 128 tripletas, 4 filas de caché, 3 de memoria— queda en el volumen anónimo, huérfano. Para conservarla hay que volcarla antes (`pg_dump`) y restaurarla después, o copiar el contenido del volumen. Es una operación sobre la única copia de esos datos, así que la decide el usuario.
 
+**Estado:** ✅ corregido el 2026-09-16, a petición del usuario y con un respaldo previo verificado.
+
+**Respaldo.** Antes de tocar nada: `pg_dump` de la base y `pg_dumpall --roles-only`, fuera del repositorio y con permisos `600`, porque el volcado incluye la clave HMAC de `SEC-05`. Se verificó restaurándolo en un Postgres desechable: 22 / 128 / 4 / 3 / 0, la clave intacta y el aislamiento en pie (128 filas con firma, 0 sin ella).
+
+**Migración.** Con el volumen nombrado declarado, `compose up` lo creó con sus etiquetas y recreó el contenedor; se paró Postgres **comprobando explícitamente** que no seguía en marcha, y se copió el volumen anónimo —montado en solo lectura— sobre el nombrado. Resultado: 1019 ficheros en ambos lados, mismo `PG_VERSION`, dueño `999:999` y `diff -r` sin diferencias. Al arrancar, Postgres registró `database system was shut down at …` sin ninguna línea de recuperación, lo que confirma que la copia viene de un cierre limpio. Recuentos, clave y aislamiento, idénticos a los del respaldo. El volumen anónimo original se conserva, huérfano a propósito, hasta que el usuario decida borrarlo.
+
+**Control negativo**, en dos proyectos desechables y con la misma secuencia —escribir una fila marca, `docker compose down` **sin** `-v`, `up` y leerla—:
+
+| | Compose anterior (`HEAD`) | Compose corregido |
+|---|---|---|
+| Volumen de datos antes / después | `6b0d2ffb…` / `cb47e5f8…` (distinto) | `hyg08despues_pgdata` / el mismo |
+| Fila marca tras `down` + `up` | `relation "marca_hyg08" does not exist` | `sobrevivo` |
+| Volumen anterior | queda huérfano | — |
+
+Esto verifica también el caso sin `-v`, que la evidencia de arriba daba solo como comportamiento documentado de Compose. Sigue siendo cierto que `down -v` y `docker volume prune` borran los datos: un volumen nombrado protege contra el descuido, no contra la orden explícita de borrar.
+
+**Incidencia durante la migración.** El primer intento omitió la declaración de `volumes:` a nivel raíz. Compose rechazó el proyecto, pero el fallo quedó oculto porque cada orden iba en una tubería (`| tail`) y `set -e` solo mira el código del último comando de la tubería: el `stop` no llegó a ejecutarse y la copia se hizo con Postgres en marcha, sobre un volumen que `docker run` creó sin las etiquetas de Compose. No hubo daño —el origen iba en solo lectura y el contenedor de desarrollo siguió en marcha con 22 / 128 / 4 / 3 / 0 y sin errores en el log—, pero la copia en caliente se descartó y el proceso se repitió con `set -o pipefail` y comprobaciones explícitas antes de cada paso destructivo.
+
 ---
 
 ## 9. Traza End-to-End Anotada
@@ -2922,7 +2940,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 |:---:|---|---|:---:|:---:|
 | 29 | ✅ hecho (2026-09-15). Contexto de tenant firmado con HMAC, verificado por una función `SECURITY DEFINER` | `SEC-05` | 3, con el paso 12 | 2–4 h |
 | 34 | Acotar el `ALTER DEFAULT PRIVILEGES` sobre `public` a las cinco tablas de la aplicación | `HYG-07` | 5 | 15 min |
-| 35 | Volumen nombrado para los datos, con volcado y restauración de la base actual | `HYG-08` | 5 | 30 min |
+| 35 | ✅ hecho (2026-09-16). Volumen nombrado para los datos, con respaldo verificado y migración en frío de la base actual | `HYG-08` | 5 | 30 min |
 | 30 | ✅ hecho (2026-09-15). Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
 | 31 | ✅ hecho (2026-09-16). No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |

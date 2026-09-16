@@ -16,6 +16,11 @@ services:
       # Sobre un volumen vacío se ejecutan los .sql de este directorio en orden
       # alfabético; los subdirectorios (sql/migrations/) se ignoran.
       - ./sql:/docker-entrypoint-initdb.d
+      # Volumen nombrado para los datos (HYG-08). Sin esta línea, la imagen declara
+      # VOLUME sobre esta ruta y Docker creaba uno anónimo: los datos persistían en un
+      # volumen con nombre de hash, que `compose down` dejaba huérfano y el `up`
+      # siguiente sustituía por otro vacío, sin que nada fallara.
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       # Por TCP a propósito: mientras corren los scripts de inicialización el servidor
       # temporal solo escucha en el socket Unix, así que 'healthy' significa que ya
@@ -24,3 +29,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+volumes:
+  pgdata:
