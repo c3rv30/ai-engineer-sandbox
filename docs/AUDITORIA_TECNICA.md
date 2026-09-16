@@ -94,10 +94,11 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `PERF-03` | ✅ corregido | 2026-09-15 | `chunk_text` y herramientas en `asyncio.to_thread`. Espera máxima de `/health`: ingesta 1182 → 21 ms, herramienta 204 → 14 ms; PDF de 20 páginas: parada del event loop 1060 → 16 ms, mismos fragmentos |
 | `PERF-04` | ✅ corregido | 2026-09-15 | `max_tokens` 300 → 1024, `reasoning` ≤ 600 caracteres y `max_retries=3` explícito. Juez real, 15 evaluaciones por variante: perdidas 10/15 → 0/15 |
 | `DOC-02` | ✅ corregido | 2026-09-15 | `ge`/`le` en las tres puntuaciones de `RAGEvaluation`: un 1,2 falla en Pydantic (reintentable) y no en el `CHECK` de SQL (pérdida silenciosa). Con `PERF-04` |
+| `BUG-10` | ✅ corregido | 2026-09-16 | Reproducido primero de extremo a extremo (le faltaba): el seguimiento de una conversación sobre Itaú/Kabeli recibía **literalmente** la respuesta de otra sobre MisterGas. Con el parche, cada una responde su propio referente y el caché no registra ningún acierto indebido |
 | `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | Los otros 11 de la foto | ⬜ abiertos | — | — |
-| `BUG-10`, `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
+| `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 | `HYG-07` | ⬜ abierto | 2026-09-15 | Hallazgo nuevo, encontrado al corregir `SEC-05`; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
@@ -115,6 +116,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`BUG-04`**: `FORCE ROW LEVEL SECURITY` no protege el DSN de `postgres` de `.env.example`, porque un superusuario elude RLS con o sin `FORCE`.
 - **`PERF-04`**: el evaluador no fallaba siempre, como dice el commit `d198be1` (`BUG-02`), pero tampoco de vez en cuando: con un contexto realista de 10 documentos perdía **10 de cada 15** evaluaciones por `max_tokens`.
 - **`PERF-01`**: la fuga entre tenants que se temía al reutilizar conexiones no llegaría a producirse con asyncpg 0.31, cuyo `RESET ALL` al devolver una conexión borra el tenant de sesión (medido). Con un reset vacío la fuga sí aparece. Tampoco era cierto que los nueve accesos usaran `app_user`: `ingestion.py` usaba por defecto el superusuario.
+- **`BUG-10`**: el hallazgo se catalogó como verificado solo por lectura de código. Reproducido el 2026-09-16, resultó ser exactamente lo descrito y algo más: la respuesta servida desde el caché arranca con *"Según el historial anterior"*, atribuyéndole al usuario una conversación ajena.
 - **`SEC-05`**: el parche propuesto (opción 1) no bastaba tal como estaba descrito. Guardar la clave en una tabla de `public` "sin `GRANT` a `app_user`" no la protege: `sql/00_create_app_user.sql` deja un `ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user`, así que la tabla nace con un `GRANT` explícito al rol y `REVOKE ... FROM PUBLIC` no lo deshace. La primera versión del parche pasó todas las pruebas de aislamiento y aun así `app_user` podía leer la clave y firmar cualquier tenant; se descubrió porque el control negativo lo comprobaba explícitamente. La clave vive ahora en un esquema propio (`tenant_security`). El `ALTER DEFAULT PRIVILEGES` queda catalogado aparte como `HYG-07`.
 - **`PERF-02`**: las tres copias sobrantes del modelo costaban ~102 MB de *physical footprint* medido, no los 270–360 MB estimados. La estimación de que consolidarlas acortaba el arranque sí se confirma: la importación de la API pasa de 16,6 s a 5,6 s.
 
@@ -1613,6 +1615,25 @@ use_cache = uses_default_retrieval(request) and not request.history
 
 La alternativa conserva el caché para los seguimientos: indexarlo por las `search_queries` que el supervisor ya resolvió, que llevan el referente explícito. Obliga a consultar el caché después del supervisor, no antes, y cuesta una llamada al LLM por petición cacheada.
 
+**Estado:** ✅ corregido el 2026-09-16 con el parche mínimo, que es el que eligió el usuario.
+
+**Primero se reprodujo de extremo a extremo**, que era lo que le faltaba al hallazgo. Contra la API y la BD reales, como `empresa_x`, con dos referentes que existen en el corpus y el caché purgado de antemano:
+
+| | Conversación A | Conversación B |
+|---|---|---|
+| Turno 1 | *"¿Qué hizo Bryan en MisterGas?"* → junio 2020 – septiembre 2022 | *"¿Qué hizo Bryan en Itaú/Kabeli?"* → mayo 2023 – marzo 2024 |
+| Turno 2 (idéntico) | *"¿Y en qué años fue eso?"* → **junio 2020 a septiembre 2022** | *"¿Y en qué años fue eso?"* → **junio 2020 a septiembre 2022** |
+
+La respuesta del turno 2 de B era **byte a byte** la de A, con un `✅ Cache Hit` en el log del servidor. El escenario del hallazgo se cumple tal como estaba descrito.
+
+**El efecto era peor de lo que decía el análisis.** La respuesta servida desde caché empieza por *"Según el historial anterior, Bryan trabajó en MisterGas (Lipigas)…"*: no solo entrega el dato del referente equivocado, sino que se lo atribuye a un historial que no es el del usuario que la recibe. Un dato erróneo presentado con la autoridad de la propia conversación.
+
+**Parche aplicado.** `is_cache_eligible(request)` en `src/api/routers/chat.py`, usado por los dos endpoints: `uses_default_retrieval(request) and not request.history`. Con él, el mismo guion da respuestas distintas y correctas en cada conversación (B responde *"Itaú/Kabeli … de Mayo 2023 a Marzo 2024"*), **0 aciertos de caché**, y en `semantic_cache` solo quedan las dos primeras preguntas, que son las que no llevan historial.
+
+**Por qué no la alternativa.** Indexar por las `search_queries` del supervisor solo cierra el defecto si el supervisor incrusta siempre el referente completo; si lo resuelve a medias, la colisión vuelve. Un defecto de corrección de datos que se vuelve infrecuente es más difícil de detectar, no menos dañino. Queda como mejora posible el día que se mida el ratio de aciertos del caché, que hoy nadie mide.
+
+**Coste asumido.** `src/frontend/app.py:87` envía el historial completo en todos los turnos salvo el primero, así que en la práctica el caché queda reservado a la primera pregunta de cada conversación — que es donde tiene valor real, porque es la que distintos usuarios repiten.
+
 ---
 
 ## 6. Rendimiento
@@ -2850,7 +2871,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | 29 | ✅ hecho (2026-09-15). Contexto de tenant firmado con HMAC, verificado por una función `SECURITY DEFINER` | `SEC-05` | 3, con el paso 12 | 2–4 h |
 | 34 | Acotar el `ALTER DEFAULT PRIVILEGES` sobre `public` a las cinco tablas de la aplicación | `HYG-07` | 5 | 15 min |
 | 30 | ✅ hecho (2026-09-15). Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
-| 31 | No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
+| 31 | ✅ hecho (2026-09-16). No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
 | 33 | `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
 | D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |

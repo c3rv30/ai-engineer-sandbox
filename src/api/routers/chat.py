@@ -48,6 +48,25 @@ def uses_default_retrieval(request: ChatRequest) -> bool:
     return (request.top_k_retrieve == DEFAULT_TOP_K_RETRIEVE
             and request.top_k_rerank == DEFAULT_TOP_K_RERANK)
 
+
+def is_cache_eligible(request: ChatRequest) -> bool:
+    """Si esta petición puede leer o escribir caché.
+
+    El caché se indexa solo por el texto de la pregunta, y desde BUG-03 la respuesta
+    depende también del historial: "¿Y en qué años fue eso?" significa cosas distintas
+    según el turno anterior. Dos conversaciones que terminan en el mismo seguimiento
+    tienen similitud 1,0 y comparten entrada (BUG-10). Reproducido contra la API real:
+    un seguimiento sobre Itaú/Kabeli recibía los años de MisterGas, presentados como
+    "Según el historial anterior" —un historial que no era el del usuario—.
+
+    Así que una petición con historial ni lee ni escribe caché, igual que una con
+    top_k propios. La alternativa —indexar por la consulta que ya resolvió el
+    supervisor— conservaría el caché en los seguimientos, pero solo cierra el defecto
+    si el supervisor incrusta siempre el referente completo, y obliga a consultar el
+    caché después de él, pagando su llamada al LLM también en los aciertos.
+    """
+    return uses_default_retrieval(request) and not request.history
+
 # Instanciamos el grafo una vez (es thread-safe)
 agent_graph = build_graph()
 
@@ -55,7 +74,7 @@ agent_graph = build_graph()
 async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     try:
         # 1. Caché Semántico
-        use_cache = uses_default_retrieval(request)
+        use_cache = is_cache_eligible(request)
         cached_data = await check_semantic_cache(current_user.tenant_id, request.query) if use_cache else None
         if cached_data:
             return StructuredAnswer(**cached_data)
@@ -118,7 +137,7 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
     """
     async def sse_generator():
         try:
-            use_cache = uses_default_retrieval(request)
+            use_cache = is_cache_eligible(request)
             cached_data = await check_semantic_cache(current_user.tenant_id, request.query) if use_cache else None
             if cached_data:
                 cached_data["answer"] = "⚡ [CACHE HIT] " + cached_data.get("answer", "")
