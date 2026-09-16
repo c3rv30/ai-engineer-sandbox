@@ -1,5 +1,8 @@
 CREATE USER app_user WITH PASSWORD 'apppassword';
-GRANT ALL PRIVILEGES ON DATABASE postgres TO app_user;
+-- Solo CONNECT, no ALL (SEC-07). ALL incluía CREATE, que permite crear esquemas: con
+-- uno propio y ALTER ROLE app_user SET search_path, que un rol puede fijarse a sí mismo,
+-- las consultas sin esquema de la aplicación iban a tablas de app_user sin RLS.
+GRANT CONNECT ON DATABASE postgres TO app_user;
 -- Se ejecuta antes que 01_init.sql: aquí todavía no existe ninguna tabla. El FORCE ROW
 -- LEVEL SECURITY que vivía en este script está ahora en 01_init.sql, para las cinco.
 --

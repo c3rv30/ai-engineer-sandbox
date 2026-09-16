@@ -105,7 +105,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | Los otros 10 de la foto | ⬜ abiertos | — | — |
 | `HYG-05` | ⬜ abierto | 2026-09-14 | Hallazgo nuevo; ver §2 y el plan (§10) |
-| `SEC-07` | ⬜ abierto | 2026-09-16 | Hallazgo nuevo, encontrado al corregir `HYG-07`: `app_user` desvía las consultas de todos los tenants a tablas propias sin RLS. Reproducido en base desechable; ver §4 y el plan (§10) |
+| `SEC-07` | 🟡 capa 1 corregida | 2026-09-16 | Hallazgo nuevo, encontrado al corregir `HYG-07`. `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base. Mismo ataque con el código real: con `HEAD`, la contraseña de la víctima acaba en una tabla del atacante sin RLS; con el parche, `CREATE SCHEMA` se deniega y la escritura va a `public`. Abiertas las capas 2 y 3 (residuo de `ALTER ROLE`) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
 
@@ -801,6 +801,27 @@ ALTER ROLE app_user SET search_path = sombra, public;
 3. **Vigilar el residuo (no medido).** `pg_db_role_setting` debe estar vacío para `app_user`. Un healthcheck o un test de arranque que lo compruebe detecta tanto el desvío como el `default_transaction_read_only`.
 
 Sin medir, y fuera de este hallazgo: `TEMPORARY`, que tiene `PUBLIC`, permite hacer sombra dentro de una sola sesión con una tabla temporal, porque `pg_temp` se busca antes que `public`. Por el código de asyncpg 0.31, el pool no ejecuta `DISCARD TEMP` al reciclar conexiones (`get_reset_query()`: `pg_advisory_unlock_all`, `CLOSE ALL`, `UNLISTEN *`, `RESET ALL`), así que la tabla temporal sobreviviría mientras viva la conexión. La capa 2 también lo cubriría.
+
+**Estado:** 🟡 **capa 1 corregida** el 2026-09-16. Las capas 2 y 3 siguen abiertas, pendientes de decidir junto a `BUG-07`.
+
+**Cambios.** `sql/00_create_app_user.sql` concede `GRANT CONNECT` en lugar de `GRANT ALL`. `sql/migrations/apply_revoke_database_create.sql` hace `REVOKE ALL` + `GRANT CONNECT` sobre una base existente, para que quede idéntica a una nueva. `TEMPORARY` sigue llegando por `PUBLIC`. La migración no deshace un desvío ya hecho, así que su cabecera trae las dos consultas que hay que comprobar antes.
+
+**Verificación.** Dos bases desechables desde un clon limpio, con el mismo ataque de la evidencia y el código real de la aplicación:
+
+| | `HEAD` (`GRANT ALL`) | Con el parche |
+|---|---|---|
+| `datacl` de `app_user` | `CTc` | `c` |
+| `CREATE SCHEMA sombra` | ok | `permission denied for database postgres` |
+| Escritura de la víctima tras el `ALTER ROLE` | a `sombra` | a `public` |
+| Perfil que recibe la víctima | hecho plantado + contraseña | *Kotlin* + contraseña, los suyos |
+| El atacante, sin firma, lee la contraseña | sí | no (`UndefinedTableError`) |
+| `app_user` firmado: insertar, actualizar, leer y borrar en las cinco tablas | 1/1/1/1/1 | 1/1/1/1/1 |
+
+`pg_dump --schema-only` y la definición del rol solo difieren en los tokens aleatorios de `\restrict` y la sal de la contraseña (el ACL de la base no forma parte del volcado de esquema).
+
+**Base de desarrollo.** Antes de migrar se comprobó que no hubiera ya un desvío: `pg_db_role_setting` vacío y ningún esquema propiedad de `app_user`. Tras la migración, `datacl` queda igual que en una base nueva (`app_user=c/postgres`) y `CREATE SCHEMA` da permiso denegado. Como `app_user` firmado, sigue leyendo las 128 tripletas y escribiendo en `user_memory` (en una transacción deshecha). Recuentos, 22 / 128 / 4 / 3 / 0 antes y después. No se lanzó la API completa: la aplicación no ejecuta DDL y el camino de datos real se comprobó en la base desechable.
+
+**Sigue abierto.** El residuo de `ALTER ROLE` sobre sí mismo (medido: `default_transaction_read_only` bloquea las escrituras) y, con él, que un `search_path` hacia un esquema que `app_user` no puede crear deje de ser inocuo si algún día recupera `CREATE`. Es la decisión entre las capas 2 y 3.
 
 ---
 
@@ -3053,7 +3074,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | 31 | ✅ hecho (2026-09-16). No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
 | 33 | ✅ hecho (2026-09-16). `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
-| 36 | `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base, y `REVOKE CREATE` en la existente. Decidir si además se neutraliza `search_path` en la aplicación y se vigila `pg_db_role_setting` | `SEC-07` | 1 | 20 min (capa 1) |
+| 36 | 🟡 capa 1 hecha (2026-09-16): `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base, y migración para la existente. Pendiente decidir si se neutraliza `search_path` en la aplicación y se vigila `pg_db_role_setting` (junto a `BUG-07`) | `SEC-07` | 1 | 20 min (capa 1) |
 | D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
 Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`).
