@@ -1,5 +1,7 @@
 # Contexto del Proyecto: AI Engineer Sandbox
 
+> **Documento histórico (Fase 1).** Describe el punto de partida del proyecto, con OpenAI como proveedor de modelos. El sistema actual usa Anthropic (Claude), LangGraph, GraphRAG, memoria a largo plazo y un evaluador asíncrono, y no lee ninguna clave de OpenAI. Para el stack y la puesta en marcha vigentes, ver `README.md` y `.env.example`.
+
 ## Objetivo
 Implementar un pipeline de AI Engineering de nivel producción que cubre:
 1. Structured Outputs & Validation con `Instructor` + `Pydantic v2`.

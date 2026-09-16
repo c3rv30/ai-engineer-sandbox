@@ -86,15 +86,17 @@ graph TD
    uv sync
    ```
 
-2. **Levantar PostgreSQL con soporte PgVector:**
-   ```bash
-   docker compose up -d
-   ```
-
-3. **Configurar las Credenciales:**
-   Copia el archivo `.env.example` a `.env` y añade tu `ANTHROPIC_API_KEY`.
+2. **Configurar las Credenciales** (antes de levantar la base de datos):
    ```bash
    cp .env.example .env
+   openssl rand -hex 32   # pégala en TENANT_SIGNING_KEY
+   openssl rand -hex 32   # pégala en JWT_SECRET_KEY
+   ```
+   Abre `.env` y rellena las tres entradas obligatorias: `ANTHROPIC_API_KEY` y las dos claves generadas. Tiene que ser antes del paso 3, porque `docker compose` lee `TENANT_SIGNING_KEY` de `.env` y no arranca sin ella. Deja `DATABASE_URL` con `app_user`: un superusuario se salta el aislamiento entre tenants.
+
+3. **Levantar PostgreSQL con soporte PgVector:**
+   ```bash
+   docker compose up -d
    ```
 
 4. **Arrancar el Backend y Frontend simultáneamente:**

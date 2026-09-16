@@ -95,11 +95,12 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `PERF-03` | ✅ corregido | 2026-09-15 | `chunk_text` y herramientas en `asyncio.to_thread`. Espera máxima de `/health`: ingesta 1182 → 21 ms, herramienta 204 → 14 ms; PDF de 20 páginas: parada del event loop 1060 → 16 ms, mismos fragmentos |
 | `PERF-04` | ✅ corregido | 2026-09-15 | `max_tokens` 300 → 1024, `reasoning` ≤ 600 caracteres y `max_retries=3` explícito. Juez real, 15 evaluaciones por variante: perdidas 10/15 → 0/15 |
 | `DOC-02` | ✅ corregido | 2026-09-15 | `ge`/`le` en las tres puntuaciones de `RAGEvaluation`: un 1,2 falla en Pydantic (reintentable) y no en el `CHECK` de SQL (pérdida silenciosa). Con `PERF-04` |
+| `DOC-03` | ✅ corregido | 2026-09-16 | Arranque desde un clon limpio siguiendo solo README y `.env.example`. Antes: falla en el paso 2, y al completarlo la API conecta como `postgres` y **`empresa_x` recibe un dato de un documento de `bryan`**. Después: arranca a la primera como `app_user`, y el mismo dato no cruza de tenant (control positivo: `bryan` sí lo recibe) |
 | `HYG-08` | ✅ corregido | 2026-09-16 | Volumen nombrado `pgdata`, con la base de desarrollo migrada sin pérdidas (copia en frío, `diff -r` sin diferencias). Control negativo con `compose down` + `up`: con el compose anterior, la fila marca desaparece y el volumen queda huérfano; con el nuevo, sobrevive |
 | `BUG-10` | ✅ corregido | 2026-09-16 | Reproducido primero de extremo a extremo (le faltaba): el seguimiento de una conversación sobre Itaú/Kabeli recibía **literalmente** la respuesta de otra sobre MisterGas. Con el parche, cada una responde su propio referente y el caché no registra ningún acierto indebido |
 | `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
-| Los otros 11 de la foto | ⬜ abiertos | — | — |
+| Los otros 10 de la foto | ⬜ abiertos | — | — |
 | `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 | `HYG-07` | ⬜ abierto | 2026-09-15 | Hallazgo nuevo, encontrado al corregir `SEC-05`; ver §2 y el plan (§10) |
 
@@ -118,6 +119,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`BUG-04`**: `FORCE ROW LEVEL SECURITY` no protege el DSN de `postgres` de `.env.example`, porque un superusuario elude RLS con o sin `FORCE`.
 - **`PERF-04`**: el evaluador no fallaba siempre, como dice el commit `d198be1` (`BUG-02`), pero tampoco de vez en cuando: con un contexto realista de 10 documentos perdía **10 de cada 15** evaluaciones por `max_tokens`.
 - **`PERF-01`**: la fuga entre tenants que se temía al reutilizar conexiones no llegaría a producirse con asyncpg 0.31, cuyo `RESET ALL` al devolver una conexión borra el tenant de sesión (medido). Con un reset vacío la fuga sí aparece. Tampoco era cierto que los nueve accesos usaran `app_user`: `ingestion.py` usaba por defecto el superusuario.
+- **`DOC-03`**: el riesgo de seguridad era real de extremo a extremo, no solo en teoría: con la plantilla, un tenant recibió por la API un dato de un documento de otro. Además, `SEC-05` había añadido una rotura que la foto no podía contener: el README levantaba la base antes de crear `.env`, y Compose ya no arranca sin `TENANT_SIGNING_KEY`.
 - **`BUG-10`**: el hallazgo se catalogó como verificado solo por lectura de código. Reproducido el 2026-09-16, resultó ser exactamente lo descrito y algo más: la respuesta servida desde el caché arranca con *"Según el historial anterior"*, atribuyéndole al usuario una conversación ajena.
 - **`SEC-05`**: el parche propuesto (opción 1) no bastaba tal como estaba descrito. Guardar la clave en una tabla de `public` "sin `GRANT` a `app_user`" no la protege: `sql/00_create_app_user.sql` deja un `ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user`, así que la tabla nace con un `GRANT` explícito al rol y `REVOKE ... FROM PUBLIC` no lo deshace. La primera versión del parche pasó todas las pruebas de aislamiento y aun así `app_user` podía leer la clave y firmar cualquier tenant; se descubrió porque el control negativo lo comprobaba explícitamente. La clave vive ahora en un esquema propio (`tenant_security`). El `ALTER DEFAULT PRIVILEGES` queda catalogado aparte como `HYG-07`.
 - **`PERF-02`**: las tres copias sobrantes del modelo costaban ~102 MB de *physical footprint* medido, no los 270–360 MB estimados. La estimación de que consolidarlas acortaba el arranque sí se confirma: la importación de la API pasa de 16,6 s a 5,6 s.
@@ -2327,6 +2329,35 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 
 Alinear `ingestion.py:21` al mismo default, y añadir a `CONTEXT.md` un encabezado de documento histórico (o reescribirlo con el stack real).
 
+**Estado:** ✅ corregido el 2026-09-16.
+
+**Qué seguía abierto.** Parte del hallazgo se había resuelto por el camino: `JWT_SECRET_KEY` entró en la plantilla con `SEC-01`, `FORCE ROW LEVEL SECURITY` con `BUG-04` y el valor por defecto de `ingestion.py` con `PERF-01`. Seguían abiertos la falta de `ANTHROPIC_API_KEY`, el `OPENAI_API_KEY` sin uso y el DSN de superusuario. Y había un problema nuevo, **introducido por `SEC-05`**: el README ordenaba `docker compose up -d` (paso 2) antes de crear `.env` (paso 3), pero desde `SEC-05` Compose exige `TENANT_SIGNING_KEY` para interpolar el servicio.
+
+**Verificación: arranque desde un clon limpio** de `HEAD`, siguiendo solo las instrucciones, en un proyecto Compose aparte. Desviaciones declaradas: se reutilizó la `.venv` del repositorio en lugar de `uv sync` (las dependencias son `HYG-01`), y se usaron otros puertos porque los de desarrollo estaban ocupados; `DATABASE_URL` se cambió solo en el puerto.
+
+| Paso | Archivos anteriores | Archivos corregidos |
+|---|---|---|
+| Levantar la base | Falla: `required variable TENANT_SIGNING_KEY is missing a value`, antes y después de copiar `.env` | Arranca (el README pide rellenar `.env` antes) |
+| `ANTHROPIC_API_KEY` en la plantilla | No existe; hay que añadir la línea a mano | Presente, marcada como obligatoria |
+| Arrancar la API con lo que pide el README | Falla: `RuntimeError: JWT_SECRET_KEY no está configurada` | Arranca |
+| Rol con el que conecta la API | `postgres` (superusuario) | `app_user` |
+
+**Aislamiento, de extremo a extremo.** En cada brazo, `bryan` (tenant 0000) ingirió por la API un documento con un dato imposible de adivinar (una ciudad inventada), y `empresa_x` (tenant 1111) preguntó por él. `top_k_rerank=9`, para que ninguna petición tocara el caché.
+
+| | Archivos anteriores | Archivos corregidos |
+|---|---|---|
+| `empresa_x` (otro tenant) | **Recibe el dato**, con 2 fuentes | No lo recibe: 0 fuentes, contexto vacío |
+| `bryan` (control positivo) | Lo recibe | Lo recibe |
+| Filas de `documents` que ve la conexión de `empresa_x` | 1, de otro tenant | 0 |
+
+Con la plantilla anterior, un tenant leía de extremo a extremo los documentos de otro, pese a `FORCE`, a la firma de `SEC-05` y a todo lo demás: un superusuario no pasa por las políticas. El control positivo descarta que el resultado de la plantilla corregida sea un fallo de la recuperación.
+
+Un primer intento preguntaba por un "código de acceso". El supervisor se negó a buscarlo por parecerle una credencial (0 fuentes y *"No puedo proporcionar códigos de acceso…"*), así que ese resultado no decía nada sobre el aislamiento y se repitió con un dato inocuo.
+
+**Cambios.** `.env.example` reescrito: `app_user` en `DATABASE_URL`, con la razón; `ANTHROPIC_API_KEY` obligatoria; sin `OPENAI_API_KEY`; y Langfuse vacío y opcional (comprobado: la aplicación funciona igual sin sus claves). En el README, rellenar `.env` pasa a ser el paso 2, antes de levantar la base, con los comandos para generar las dos claves. `CONTEXT.md` lleva un encabezado de documento histórico.
+
+**Fuera de alcance.** `scratch_db.py` y `test_db.py`, en la raíz, siguen conectando como `postgres`. Son el código muerto de `HYG-02`: no los usa la aplicación ni los cita la documentación.
+
 ---
 
 ### `DOC-04` 🟡 `NetworkX` documentado pero nunca usado
@@ -2999,7 +3030,7 @@ El paso 12 debe hacerse **junto** a la corrección de `SEC-02`: con pool, `SET a
 |:---:|---|---|---|
 | 16 | Decidir sobre el streaming: reimplementar con `astream_events`, o reescribir README y marcar `TROUBLESHOOTING.md` §4-5 | `DOC-01` | `chat.py` o `README.md` |
 | 17 | Añadir `ge=0.0, le=1.0` a `RAGEvaluation` (alinea código con paper) | `DOC-02` | `evaluator.py` |
-| 18 | Reescribir `.env.example`; banner histórico en `CONTEXT.md` | `DOC-03` | `.env.example`, `CONTEXT.md` |
+| 18 | ✅ hecho (2026-09-16). Reescribir `.env.example`; banner histórico en `CONTEXT.md`; en el README, rellenar `.env` antes de levantar la base | `DOC-03` | `.env.example`, `CONTEXT.md`, `README.md` |
 | 19 | Corregir la mención a NetworkX y remitir al roadmap | `DOC-04` | `README.md` |
 | 20 | Banner de documento histórico en `ARCHITECTURE.md` | `DOC-05` | `ARCHITECTURE.md` |
 | 21 | Alinear 400/500 tokens; eliminar `overlap`; citar por función, no por línea | `DOC-06` | `PAPER.md`, `PAPER_EN.md`, `ingestion.py` |
