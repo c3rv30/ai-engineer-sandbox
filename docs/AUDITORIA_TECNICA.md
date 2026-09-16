@@ -98,11 +98,12 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `DOC-03` | ✅ corregido | 2026-09-16 | Arranque desde un clon limpio siguiendo solo README y `.env.example`. Antes: falla en el paso 2, y al completarlo la API conecta como `postgres` y **`empresa_x` recibe un dato de un documento de `bryan`**. Después: arranca a la primera como `app_user`, y el mismo dato no cruza de tenant (control positivo: `bryan` sí lo recibe) |
 | `HYG-08` | ✅ corregido | 2026-09-16 | Volumen nombrado `pgdata`, con la base de desarrollo migrada sin pérdidas (copia en frío, `diff -r` sin diferencias). Control negativo con `compose down` + `up`: con el compose anterior, la fila marca desaparece y el volumen queda huérfano; con el nuevo, sobrevive |
 | `HYG-07` | ✅ corregido | 2026-09-16 | Línea borrada de `00_create_app_user.sql` (con los dos `GRANT ... ON ALL` que no hacían nada) y migración `apply_revoke_default_privileges.sql` para la base existente. Tabla nueva en `public` creada como `postgres`: `app_user` la lee → no la lee, en la base de desarrollo y en una creada desde cero. Las cinco tablas conservan sus permisos y un ida y vuelta firmado funciona en todas |
+| `HYG-06` | ✅ corregido | 2026-09-16 | `restart: unless-stopped`. Caída inmediata del servidor en un proyecto desechable: con el compose anterior queda `exited`; con el nuevo vuelve solo (`restarts=1`), y un `docker stop` manual se sigue respetando. El reinicio del demonio no se reprodujo |
 | `BUG-10` | ✅ corregido | 2026-09-16 | Reproducido primero de extremo a extremo (le faltaba): el seguimiento de una conversación sobre Itaú/Kabeli recibía **literalmente** la respuesta de otra sobre MisterGas. Con el parche, cada una responde su propio referente y el caché no registra ningún acierto indebido |
 | `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | Los otros 10 de la foto | ⬜ abiertos | — | — |
-| `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
+| `HYG-05` | ⬜ abierto | 2026-09-14 | Hallazgo nuevo; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
 
@@ -2809,6 +2810,12 @@ done
     restart: unless-stopped
 ```
 
+**Estado:** ✅ corregido el 2026-09-16.
+
+**Verificación.** Desde un clon limpio, en proyectos Compose desechables con puerto propio, se provocó una caída del servidor con `pg_ctl stop -m immediate` dentro del contenedor. Con el compose anterior, el contenedor queda `exited` y nada lo levanta. Con el nuevo, Docker lo reinicia solo (`restarts=1`, `running`). Después, un `docker stop` manual lo deja parado, que es lo que distingue `unless-stopped` de `always`. El reinicio de Docker Desktop, que es la evidencia original, no se reprodujo para no tumbar los demás contenedores de la máquina. Ese caso lo cubre la definición de la política: un contenedor que no se paró a mano vuelve cuando arranca el demonio.
+
+**Base de desarrollo.** `docker compose up -d` recreó el contenedor con la política nueva sobre el mismo volumen `ai_engineer_sandbox_pgdata`: 22 / 128 / 4 / 3 / 0 antes y después.
+
 ---
 
 ### `HYG-07` 🟡 `ALTER DEFAULT PRIVILEGES` regala a `app_user` cualquier tabla futura de `public`
@@ -2993,7 +3000,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | 30 | ✅ hecho (2026-09-15). Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
 | 31 | ✅ hecho (2026-09-16). No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
-| 33 | `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
+| 33 | ✅ hecho (2026-09-16). `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
 | D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
 Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`).

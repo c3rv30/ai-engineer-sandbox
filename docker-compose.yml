@@ -1,6 +1,10 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    # Sin política de reinicio, un reinicio de Docker Desktop o del equipo dejaba la base
+    # parada y la API fallando con conexión rechazada en el 5433 (HYG-06). Un
+    # `docker stop` o `compose stop` manual se sigue respetando.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
