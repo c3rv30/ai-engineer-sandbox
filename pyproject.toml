@@ -15,7 +15,6 @@ dependencies = [
     "pillow>=12.3.0",
     "pydantic>=2.13.5",
     "pymupdf>=1.28.2",
-    "pytest>=9.1.1",
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
     "sentence-transformers>=6.0.1",
@@ -23,3 +22,28 @@ dependencies = [
     "tiktoken>=0.14.0",
     "uvicorn>=0.52.4",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+# Solo tests/: la raíz tiene scripts sueltos test_*.py que hacen peticiones o cargan
+# modelos al importarse (HYG-02).
+testpaths = ["tests"]
+# Equivale al PYTHONPATH=. con que el README arranca la API y la ingesta.
+pythonpath = ["."]
+# deepeval registra un plugin que pytest carga siempre (~1,7 s, importa anthropic y
+# openai). La evaluación de tests/evals/ no lo necesita: assert_test funciona sin él.
+addopts = ["--strict-markers", "-p", "no:deepeval"]
+markers = [
+    "db: necesita la base PostgreSQL desechable que levanta tests/db/conftest.py",
+    "eval: evaluación de calidad con juez LLM; solo se recoge con --run-evals",
+]
+asyncio_mode = "auto"
+# Un único event loop para toda la sesión: el pool de src/services/db.py es uno por
+# loop, y un loop por test crearía un pool por test sin cerrar los anteriores.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
