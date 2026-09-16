@@ -47,6 +47,7 @@ El valor de esta auditoría no está en cuestionar el diseño sino en registrar 
 > - `BUG-09` (🟠), el 2026-09-13, al reescribir el bucle de streaming para `DOC-01`.
 > - `SEC-05` (🟠), `SEC-06` (🟡), `BUG-10` (🟠), `HYG-05` (🟡) y `HYG-06` (⚪), el 2026-09-14.
 > - `HYG-07` (🟡), el 2026-09-15, al implementar el parche de `SEC-05`.
+> - `HYG-08` (🟠), el 2026-09-16, al revisar el estado de Docker.
 
 ### Criterios de severidad
 
@@ -100,6 +101,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | Los otros 11 de la foto | ⬜ abiertos | — | — |
 | `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
 | `HYG-07` | ⬜ abierto | 2026-09-15 | Hallazgo nuevo, encontrado al corregir `SEC-05`; ver §2 y el plan (§10) |
+| `HYG-08` | ⬜ abierto | 2026-09-16 | Hallazgo nuevo: los datos viven en un volumen anónimo; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
 
@@ -161,8 +163,9 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `HYG-05` | 🟡 | Tres servicios crean su cliente de Anthropic antes de cargar `.env` | `src/services/router.py:10` | 5 |
 | `HYG-06` | ⚪ | La base de datos no se reinicia con Docker | `docker-compose.yml` | 5 |
 | `HYG-07` | 🟡 | `ALTER DEFAULT PRIVILEGES` regala a `app_user` cualquier tabla futura de `public` | `sql/00_create_app_user.sql:5` | 5 |
+| `HYG-08` | 🟠 | Los datos de la base viven en un volumen anónimo | `docker-compose.yml` | 5 |
 
-Las seis últimas filas son posteriores a la foto (cinco del 2026-09-14 y `HYG-07` del 2026-09-15) y no entran en el recuento de §1.
+Las siete últimas filas son posteriores a la foto (cinco del 2026-09-14, `HYG-07` del 2026-09-15 y `HYG-08` del 2026-09-16) y no entran en el recuento de §1.
 
 ---
 
@@ -2811,6 +2814,55 @@ SELECT has_table_privilege('app_user', 'secreta', 'SELECT');   -- true
 
 ---
 
+### `HYG-08` 🟠 Los datos de la base viven en un volumen anónimo
+
+> Posterior a la foto: encontrado el 2026-09-16, al revisar el estado de Docker.
+
+**Ubicación.** `docker-compose.yml`: el servicio `postgres` monta `./sql` en `/docker-entrypoint-initdb.d`, pero no declara nada para `/var/lib/postgresql/data`.
+
+**Análisis.** La imagen `pgvector/pgvector:pg16` declara `VOLUME /var/lib/postgresql/data`, así que Docker crea un volumen **anónimo** en el primer arranque. Los datos persisten —sobreviven a `stop`/`start`—, pero en un volumen cuyo nombre es un hash, indistinguible de cualquier otro anónimo de la máquina y no referenciado desde el proyecto.
+
+El riesgo no es perder datos por un fallo, sino por un comando rutinario:
+
+| Acción | Efecto |
+|---|---|
+| `docker stop` / `start` | Los datos sobreviven |
+| `docker compose down` | El contenedor desaparece y el volumen queda **huérfano**; un `up` posterior crea uno nuevo y vacío, y la base aparece vacía sin que nada falle |
+| `docker compose down -v` | Los datos se borran, sin recuperación |
+| `docker volume prune` | Se lleva los anónimos huérfanos |
+
+Es el mismo patrón de `BUG-08` (caché del re-ranker en `/tmp`): estado que importa, guardado donde nadie lo declara.
+
+**Evidencia.** Sobre el contenedor de desarrollo, con 41 horas en marcha:
+
+```
+$ docker inspect ai_engineer_sandbox-postgres-1 -f '{{range .Mounts}}...{{end}}'
+bind   | origen=<repo>/sql | destino=/docker-entrypoint-initdb.d
+volume | origen=5b179a9ea01f43aa9f977868ee27c1216570a8f846c5932cc53428eec304a9cd
+       | destino=/var/lib/postgresql/data
+
+$ docker inspect pgvector/pgvector:pg16 -f '{{json .Config.Volumes}}'
+{"/var/lib/postgresql/data":{}}
+```
+
+`docker volume ls` no muestra ningún volumen con nombre del proyecto; hay 3 anónimos en la máquina. El comportamiento con `-v` sí está comprobado aquí: al hacer `down -v` del proyecto desechable usado en `SEC-05` y levantarlo de nuevo, la base nació vacía. El caso sin `-v` es comportamiento documentado de Compose, no verificado en esta máquina.
+
+**Parche.** Declarar un volumen nombrado:
+
+```yaml
+services:
+  postgres:
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
+volumes:
+  pgdata:
+```
+
+**Atención al aplicarlo:** el cambio no migra nada. Al levantar con el volumen nombrado, Postgres arranca sobre un volumen vacío, ejecuta los scripts de inicialización y la base de desarrollo actual —22 documentos, 128 tripletas, 4 filas de caché, 3 de memoria— queda en el volumen anónimo, huérfano. Para conservarla hay que volcarla antes (`pg_dump`) y restaurarla después, o copiar el contenido del volumen. Es una operación sobre la única copia de esos datos, así que la decide el usuario.
+
+---
+
 ## 9. Traza End-to-End Anotada
 
 Recorrido de una consulta real por el sistema, señalando dónde se activa cada hallazgo. Escenario: usuario autenticado como `bryan` envía *"¿Y en qué años trabajó con eso?"* como **segunda** pregunta de la conversación, tras haber preguntado por AWS.
@@ -2870,6 +2922,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 |:---:|---|---|:---:|:---:|
 | 29 | ✅ hecho (2026-09-15). Contexto de tenant firmado con HMAC, verificado por una función `SECURITY DEFINER` | `SEC-05` | 3, con el paso 12 | 2–4 h |
 | 34 | Acotar el `ALTER DEFAULT PRIVILEGES` sobre `public` a las cinco tablas de la aplicación | `HYG-07` | 5 | 15 min |
+| 35 | Volumen nombrado para los datos, con volcado y restauración de la base actual | `HYG-08` | 5 | 30 min |
 | 30 | ✅ hecho (2026-09-15). Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
 | 31 | ✅ hecho (2026-09-16). No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
