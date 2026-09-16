@@ -96,10 +96,10 @@ ALTER TABLE knowledge_graph FORCE ROW LEVEL SECURITY;
 -- si viene acompañado de una firma HMAC calculada con la clave de abajo, que app_user
 -- no puede leer. El detalle está en sql/migrations/apply_tenant_signing.sql.
 --
--- La clave vive en su propio esquema, no en public: 00_create_app_user.sql deja un
--- ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user, así
--- que toda tabla que el superusuario cree en public nace con un GRANT explícito a
--- app_user, y REVOKE ... FROM PUBLIC no lo deshace.
+-- La clave vive en su propio esquema, no en public. Hasta HYG-07, 00_create_app_user.sql
+-- dejaba un ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO
+-- app_user, y una tabla de public nacía legible para app_user; el esquema aparte, con
+-- sus REVOKE explícitos, no depende de que ese privilegio por defecto no vuelva.
 CREATE SCHEMA IF NOT EXISTS tenant_security;
 REVOKE ALL ON SCHEMA tenant_security FROM PUBLIC;
 REVOKE ALL ON SCHEMA tenant_security FROM app_user;
@@ -173,6 +173,6 @@ DROP POLICY IF EXISTS kg_tenant_isolation_policy ON knowledge_graph;
 CREATE POLICY kg_tenant_isolation_policy ON knowledge_graph
     USING (tenant_id = app_current_tenant());
 
--- Explícitos aunque 00_create_app_user.sql fije privilegios por defecto: así el script
--- no depende de cómo se creó el rol.
+-- Los únicos permisos de app_user sobre tablas: no hay privilegios por defecto en public
+-- (HYG-07). Una tabla nueva que deba usar la aplicación necesita su propio GRANT.
 GRANT ALL PRIVILEGES ON TABLE documents, semantic_cache, user_memory, rag_evaluations, knowledge_graph TO app_user;

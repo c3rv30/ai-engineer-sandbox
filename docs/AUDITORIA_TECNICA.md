@@ -97,12 +97,12 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `DOC-02` | ✅ corregido | 2026-09-15 | `ge`/`le` en las tres puntuaciones de `RAGEvaluation`: un 1,2 falla en Pydantic (reintentable) y no en el `CHECK` de SQL (pérdida silenciosa). Con `PERF-04` |
 | `DOC-03` | ✅ corregido | 2026-09-16 | Arranque desde un clon limpio siguiendo solo README y `.env.example`. Antes: falla en el paso 2, y al completarlo la API conecta como `postgres` y **`empresa_x` recibe un dato de un documento de `bryan`**. Después: arranca a la primera como `app_user`, y el mismo dato no cruza de tenant (control positivo: `bryan` sí lo recibe) |
 | `HYG-08` | ✅ corregido | 2026-09-16 | Volumen nombrado `pgdata`, con la base de desarrollo migrada sin pérdidas (copia en frío, `diff -r` sin diferencias). Control negativo con `compose down` + `up`: con el compose anterior, la fila marca desaparece y el volumen queda huérfano; con el nuevo, sobrevive |
+| `HYG-07` | ✅ corregido | 2026-09-16 | Línea borrada de `00_create_app_user.sql` (con los dos `GRANT ... ON ALL` que no hacían nada) y migración `apply_revoke_default_privileges.sql` para la base existente. Tabla nueva en `public` creada como `postgres`: `app_user` la lee → no la lee, en la base de desarrollo y en una creada desde cero. Las cinco tablas conservan sus permisos y un ida y vuelta firmado funciona en todas |
 | `BUG-10` | ✅ corregido | 2026-09-16 | Reproducido primero de extremo a extremo (le faltaba): el seguimiento de una conversación sobre Itaú/Kabeli recibía **literalmente** la respuesta de otra sobre MisterGas. Con el parche, cada una responde su propio referente y el caché no registra ningún acierto indebido |
 | `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | Los otros 10 de la foto | ⬜ abiertos | — | — |
 | `HYG-05`, `HYG-06` | ⬜ abiertos | 2026-09-14 | Hallazgos nuevos; ver §2 y el plan (§10) |
-| `HYG-07` | ⬜ abierto | 2026-09-15 | Hallazgo nuevo, encontrado al corregir `SEC-05`; ver §2 y el plan (§10) |
 
 **Pendientes de decisión sobre datos.** El código corregido ya no genera estas dos cosas, pero siguen en la base de desarrollo. No se tocaron sin que el usuario lo decida:
 
@@ -122,6 +122,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`DOC-03`**: el riesgo de seguridad era real de extremo a extremo, no solo en teoría: con la plantilla, un tenant recibió por la API un dato de un documento de otro. Además, `SEC-05` había añadido una rotura que la foto no podía contener: el README levantaba la base antes de crear `.env`, y Compose ya no arranca sin `TENANT_SIGNING_KEY`.
 - **`BUG-10`**: el hallazgo se catalogó como verificado solo por lectura de código. Reproducido el 2026-09-16, resultó ser exactamente lo descrito y algo más: la respuesta servida desde el caché arranca con *"Según el historial anterior"*, atribuyéndole al usuario una conversación ajena.
 - **`SEC-05`**: el parche propuesto (opción 1) no bastaba tal como estaba descrito. Guardar la clave en una tabla de `public` "sin `GRANT` a `app_user`" no la protege: `sql/00_create_app_user.sql` deja un `ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user`, así que la tabla nace con un `GRANT` explícito al rol y `REVOKE ... FROM PUBLIC` no lo deshace. La primera versión del parche pasó todas las pruebas de aislamiento y aun así `app_user` podía leer la clave y firmar cualquier tenant; se descubrió porque el control negativo lo comprobaba explícitamente. La clave vive ahora en un esquema propio (`tenant_security`). El `ALTER DEFAULT PRIVILEGES` queda catalogado aparte como `HYG-07`.
+- **`HYG-07`**: el plan (§10, paso 34) proponía "acotar el `ALTER DEFAULT PRIVILEGES` a las cinco tablas de la aplicación", y eso no se puede hacer: los privilegios por defecto se definen por rol, esquema y tipo de objeto, no por nombre de tabla. El parche correcto era el de la propia ficha, borrar la línea. Además, borrarla del script de arranque no basta: la base existente conserva el privilegio en `pg_default_acl` hasta que se revoque.
 - **`PERF-02`**: las tres copias sobrantes del modelo costaban ~102 MB de *physical footprint* medido, no los 270–360 MB estimados. La estimación de que consolidarlas acortaba el arranque sí se confirma: la importación de la API pasa de 16,6 s a 5,6 s.
 
 ---
@@ -164,7 +165,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `BUG-10` | 🟠 | El caché semántico ignora el historial | `src/services/cache.py:17` | 2 |
 | `HYG-05` | 🟡 | Tres servicios crean su cliente de Anthropic antes de cargar `.env` | `src/services/router.py:10` | 5 |
 | `HYG-06` | ⚪ | La base de datos no se reinicia con Docker | `docker-compose.yml` | 5 |
-| `HYG-07` | 🟡 | `ALTER DEFAULT PRIVILEGES` regala a `app_user` cualquier tabla futura de `public` | `sql/00_create_app_user.sql:5` | 5 |
+| `HYG-07` | 🟡 | `ALTER DEFAULT PRIVILEGES` regala a `app_user` cualquier tabla futura de `public` | `sql/00_create_app_user.sql:5` (ya borrada) | 5 |
 | `HYG-08` | 🟠 | Los datos de la base viven en un volumen anónimo | `docker-compose.yml` | 5 |
 
 Las siete últimas filas son posteriores a la foto (cinco del 2026-09-14, `HYG-07` del 2026-09-15 y `HYG-08` del 2026-09-16) y no entran en el recuento de §1.
@@ -2843,6 +2844,23 @@ SELECT has_table_privilege('app_user', 'secreta', 'SELECT');   -- true
 
 **Parche.** Borrar la línea (las cinco tablas de la aplicación ya reciben su `GRANT` explícito en `01_init.sql`). Mientras siga ahí, todo objeto que deba quedar fuera del alcance de `app_user` va en un esquema aparte, como hace ya la clave de `SEC-05` en `tenant_security`.
 
+**Estado:** ✅ corregido el 2026-09-16.
+
+**Cambios.** `sql/00_create_app_user.sql` pierde el `ALTER DEFAULT PRIVILEGES` y los dos `GRANT ... ON ALL TABLES/SEQUENCES`, que no hacían nada porque se ejecutan antes de que exista ninguna tabla. Tampoco hay secuencias: las claves son `UUID`. Los permisos de `app_user` sobre tablas son ahora solo los `GRANT` explícitos del final de `01_init.sql`. Como el script de arranque no toca una base que ya existe, `sql/migrations/apply_revoke_default_privileges.sql` revoca el privilegio por defecto (`ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM app_user`). La aplicación no crea tablas en tiempo de ejecución, así que nada dependía de ese privilegio.
+
+**Verificación.** La reproducción de la ficha se hizo como `postgres` dentro de una transacción que se deshace, así que la tabla nunca llegó a existir:
+
+| | Base de desarrollo | Base nueva desde clon limpio |
+|---|---|---|
+| Antes: filas en `pg_default_acl` | 1 | 1 |
+| Antes: `app_user` lee la tabla nueva | `true` | `true` |
+| Después: filas en `pg_default_acl` | 0 | 0 |
+| Después: `app_user` lee la tabla nueva | `false` | `false` |
+
+Control de que no se rompe nada: las cinco tablas conservan `SELECT, INSERT, UPDATE, DELETE` para `app_user` en las dos variantes. Con contexto firmado, `app_user` inserta, actualiza, lee (1/1/1/1/1) y borra en las cinco, dentro de una transacción deshecha. `tenant_security.signing_key` sigue sin ser legible. El `pg_dump --schema-only` de las dos bases nuevas solo difiere en el bloque `DEFAULT ACL`. La base de desarrollo, 22 / 128 / 4 / 3 / 0 antes y después.
+
+El esquema `tenant_security` de `SEC-05` se mantiene: ya no hace falta para esquivar este privilegio, pero no depende de que alguien vuelva a añadirlo.
+
 ---
 
 ### `HYG-08` 🟠 Los datos de la base viven en un volumen anónimo
@@ -2970,7 +2988,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | # | Acción | Hallazgo | Bloque | Esfuerzo |
 |:---:|---|---|:---:|:---:|
 | 29 | ✅ hecho (2026-09-15). Contexto de tenant firmado con HMAC, verificado por una función `SECURITY DEFINER` | `SEC-05` | 3, con el paso 12 | 2–4 h |
-| 34 | Acotar el `ALTER DEFAULT PRIVILEGES` sobre `public` a las cinco tablas de la aplicación | `HYG-07` | 5 | 15 min |
+| 34 | ✅ hecho (2026-09-16). Quitar el `ALTER DEFAULT PRIVILEGES` sobre `public` y revocarlo en la base existente (no se puede acotar a tablas concretas) | `HYG-07` | 5 | 15 min |
 | 35 | ✅ hecho (2026-09-16). Volumen nombrado para los datos, con respaldo verificado y migración en frío de la base actual | `HYG-08` | 5 | 30 min |
 | 30 | ✅ hecho (2026-09-15). Mensaje genérico con identificador al cliente; el detalle, solo en el log | `SEC-06` | 1 | 20 min |
 | 31 | ✅ hecho (2026-09-16). No usar el caché cuando la petición trae historial | `BUG-10` | 2 | 15 min |
