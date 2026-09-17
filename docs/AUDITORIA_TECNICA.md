@@ -49,6 +49,7 @@ El valor de esta auditoría no está en cuestionar el diseño sino en registrar 
 > - `HYG-07` (🟡), el 2026-09-15, al implementar el parche de `SEC-05`.
 > - `HYG-08` (🟠), el 2026-09-16, al revisar el estado de Docker.
 > - `SEC-07` (🟠), el 2026-09-16, al corregir `HYG-07`.
+> - `HYG-09` (⚪), el 2026-09-17, al cerrar la capa de regresión de la API.
 
 ### Criterios de severidad
 
@@ -104,6 +105,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | `BUG-07` | ✅ corregido | 2026-09-16 | Suite de regresión en dos capas, planificada como cambio de OpenSpec (`regression-test-suite`). Capa 1, lógica pura: 71 tests en ~0,3 s sin BD, LLM ni `.env`. Capa 2, Postgres desechable levantado por pytest: 18 tests en ~8 s, sin tocar la base de desarrollo. Control negativo: 22 de 22 defectos reintroducidos detectados |
+| Capa de API | ✅ añadida | 2026-09-17 | Tercera capa de la suite, con dobles del grafo y de los servicios (cambio de OpenSpec `api-regression-layer`): 40 tests sin Docker que fijan `SEC-01`, `SEC-02`, `SEC-06`, `BUG-01` y `BUG-09`. Control negativo: 9 de 9. Sin cambios en producción |
 | Los otros 9 de la foto | ⬜ abiertos | — | — |
 | `HYG-05` | ⬜ abierto | 2026-09-14 | Hallazgo nuevo; ver §2 y el plan (§10) |
 | `SEC-07` | 🟡 capa 1 corregida | 2026-09-16 | Hallazgo nuevo, encontrado al corregir `HYG-07`. `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base. Mismo ataque con el código real: con `HEAD`, la contraseña de la víctima acaba en una tabla del atacante sin RLS; con el parche, `CREATE SCHEMA` se deniega y la escritura va a `public`. Abiertas las capas 2 y 3 (residuo de `ALTER ROLE`) |
@@ -173,8 +175,9 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `HYG-07` | 🟡 | `ALTER DEFAULT PRIVILEGES` regala a `app_user` cualquier tabla futura de `public` | `sql/00_create_app_user.sql:5` (ya borrada) | 5 |
 | `HYG-08` | 🟠 | Los datos de la base viven en un volumen anónimo | `docker-compose.yml` | 5 |
 | `SEC-07` | 🟠 | `app_user` puede desviar las consultas de la aplicación a tablas propias sin RLS | `sql/00_create_app_user.sql:2` | 1 |
+| `HYG-09` | ⚪ | La telemetría de `onnxruntime` aborta el proceso al cerrar | `src/services/reranker.py:38` (vía FlashRank) | 5 |
 
-Las ocho últimas filas son posteriores a la foto (cinco del 2026-09-14, `HYG-07` del 2026-09-15, y `HYG-08` y `SEC-07` del 2026-09-16) y no entran en el recuento de §1.
+Las nueve últimas filas son posteriores a la foto (cinco del 2026-09-14, `HYG-07` del 2026-09-15, `HYG-08` y `SEC-07` del 2026-09-16, y `HYG-09` del 2026-09-17) y no entran en el recuento de §1.
 
 ---
 
@@ -1539,7 +1542,9 @@ Dos escenarios de la spec se añadieron al implementar, porque sin ellos el test
 
 **Configuración.** `pytest` y `pytest-asyncio` pasan al grupo `dev` (con `--no-sync`, ver `HYG-01`). `testpaths = ["tests"]`, así que los `test_*.py` de la raíz (`HYG-02`) ya no se recogen. Además, `-p no:deepeval`: su plugin se cargaba en cada ejecución (~1,7 s, importa `anthropic` y `openai`). La suite se ejecuta con `uv run pytest`, y la capa pura sola con `uv run pytest tests/unit`.
 
-**Fuera de este cambio.** La capa de API con dobles (`SEC-01`, `SEC-02` en el borde, `SEC-06`, `BUG-01`, `BUG-09`), que es el siguiente cambio. Las evals de calidad (`test_rag.py`, juez, `deepeval` en producción, la afirmación del README). Los tests de `chunk_text` y `cosine_distance` que sugería la ficha, que no protegen ninguna corrección y viven en un módulo que carga modelos. Las mediciones de rendimiento y de Docker (`PERF-02` a `PERF-04`, `DOC-01`, `HYG-06`, `HYG-08`, `DOC-03`), que siguen siendo manuales.
+**Añadido después.** La capa de API con dobles llegó el 2026-09-17 con el cambio `api-regression-layer`: 40 tests más, con control negativo 9 de 9, que fijan `SEC-01`, `SEC-02`, `SEC-06`, `BUG-01` y `BUG-09` en el borde HTTP. Al cerrarla salió `HYG-09`.
+
+**Fuera de aquel cambio.** Las evals de calidad (`test_rag.py`, juez, `deepeval` en producción, la afirmación del README). Los tests de `chunk_text` y `cosine_distance` que sugería la ficha, que no protegen ninguna corrección y viven en un módulo que carga modelos. Las mediciones de rendimiento y de Docker (`PERF-02` a `PERF-04`, `DOC-01`, `HYG-06`, `HYG-08`, `DOC-03`), que siguen siendo manuales.
 
 ---
 
@@ -3058,6 +3063,40 @@ Esto verifica también el caso sin `-v`, que la evidencia de arriba daba solo co
 
 ---
 
+### `HYG-09` ⚪ La telemetría de `onnxruntime` aborta el proceso al cerrar
+
+> Posterior a la foto: encontrado el 2026-09-17, al cerrar la capa de regresión de la API.
+
+**Ubicación.** `src/services/reranker.py:38` crea el `Ranker` de FlashRank, que carga `onnxruntime`. El paquete trae compilado el cliente de telemetría de Microsoft (*1DS / Microsoft::Applications::Events*), que arranca un hilo propio.
+
+**Análisis.** Ese hilo hace peticiones HTTP y procesa sus respuestas. Si una llega cuando el intérprete ya está cerrando, toma un `recursive_mutex` ya destruido, la excepción escapa y el proceso termina con `abort` (código 134). Ocurre **después** de que el programa haya hecho su trabajo, así que no corrompe nada, pero un proceso que terminó bien devuelve un código de error: cualquier automatización que mire el código de salida lo da por fallido.
+
+**Evidencia.** La suite completa (129 tests) terminaba así en **7 de cada 8 ejecuciones**, siempre después de imprimir `129 passed`:
+
+```
+129 passed in 18.39s
+libc++abi: terminating due to uncaught exception of type std::__1::system_error:
+    recursive_mutex lock failed: Invalid argument
+```
+
+El informe de macOS (`~/Library/Logs/DiagnosticReports/python3.14-*.ips`) señala el hilo culpable:
+
+```
+onnxruntime_pybind11_state.so | Microsoft::Applications::Events::HttpClientManager::onHttpResponse
+onnxruntime_pybind11_state.so | Microsoft::Applications::Events::LogManagerImpl::DispatchEvent
+libc++.1.dylib                | std::__1::recursive_mutex::lock()  ->  __cxa_throw  ->  abort
+```
+
+Solo aparecía en la suite completa, la única que carga FlashRank (al importar la aplicación) y dura lo suficiente para que la telemetría complete un viaje de ida y vuelta. Las capas por separado no lo reproducen (3 de 3 limpias cada una), ni tampoco importar la aplicación y salir (0 de 8), que es demasiado corto.
+
+**Alcance sobre la aplicación real: no reproducido.** Tres arranques de uvicorn con petición a `/health` y parada con `SIGTERM` tras 25 s terminaron en 143 (el propio `SIGTERM`), sin `abort`. No se descarta en un proceso de vida larga que termine por su cuenta.
+
+**Parche aplicado (solo en los tests).** `tests/conftest.py` llama a `onnxruntime.disable_telemetry_events()` antes de que nada importe el re-ranker. Medido: de 7 fallos en 8 ejecuciones a **0 en 20**. Desactivarla más tarde no basta: haciéndolo al importar la aplicación, aún fallaban 2 de 8, porque el hilo ya estaba en marcha.
+
+**Decisión pendiente.** La misma llamada en `src/services/reranker.py`, antes de crear el `Ranker`, protegería a cualquier proceso de la aplicación. Es una línea, pero es producción y su efecto ahí no está medido, así que lo decide el usuario.
+
+---
+
 ## 9. Traza End-to-End Anotada
 
 Recorrido de una consulta real por el sistema, señalando dónde se activa cada hallazgo. Escenario: usuario autenticado como `bryan` envía *"¿Y en qué años trabajó con eso?"* como **segunda** pregunta de la conversación, tras haber preguntado por AWS.
@@ -3123,6 +3162,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
 | 33 | ✅ hecho (2026-09-16). `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
 | 36 | 🟡 capa 1 hecha (2026-09-16): `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base, y migración para la existente. Pendiente decidir si se neutraliza `search_path` en la aplicación y se vigila `pg_db_role_setting` (junto a `BUG-07`) | `SEC-07` | 1 | 20 min (capa 1) |
+| 37 | Decidir si `disable_telemetry_events()` entra también en `reranker.py`, no solo en los tests | `HYG-09` | 5 | 5 min |
 | D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
 Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`). Hecho el 2026-09-16: desde entonces, la mayoría viven en `tests/unit/` y `tests/db/`.
