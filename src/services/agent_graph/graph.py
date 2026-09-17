@@ -1,25 +1,8 @@
 from langgraph.graph import StateGraph, END
 from src.services.agent_graph.state import AgentState
 from src.services.agent_graph.nodes import supervisor_node, researcher_node, generator_node
+from src.services.agent_graph.routing import route_supervisor, route_reviewer
 
-def route_supervisor(state: AgentState) -> str:
-    # Si el supervisor ya generó una respuesta final (saludos, out_of_scope, herramientas)
-    if state.get("final_answer"):
-        return "END"
-    return "researcher"
-
-def route_reviewer(state: AgentState) -> str:
-    # Si Claude indicó que requiere más info y no hemos iterado demasiado
-    if state.get("needs_more_info") and state.get("iterations", 0) < 2:
-        if state.get("retrieval_exhausted"):
-            # El reintento repetiría exactamente el mismo contexto: solo añadiría coste.
-            print("⏹️ [Revisor] Falta contexto, pero ampliar la búsqueda no traería nada nuevo. Se termina.")
-            return "END"
-        # El investigador amplía la ventana de recuperación en cada reintento
-        # (retrieval_window en nodes.py).
-        print("🔄 [Revisor] Falta contexto. Volviendo al Investigador con la búsqueda ampliada...")
-        return "researcher"
-    return "END"
 
 def build_graph():
     workflow = StateGraph(AgentState)

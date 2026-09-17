@@ -103,7 +103,8 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `BUG-10` | ✅ corregido | 2026-09-16 | Reproducido primero de extremo a extremo (le faltaba): el seguimiento de una conversación sobre Itaú/Kabeli recibía **literalmente** la respuesta de otra sobre MisterGas. Con el parche, cada una responde su propio referente y el caché no registra ningún acierto indebido |
 | `SEC-06` | ✅ corregido | 2026-09-15 | Los tres puntos registran la traza y devuelven `Error interno (<id>)`. Contra servidor real: la ruta absoluta del temporal y el 401 de Anthropic pasan de llegar al cliente a existir solo en el log, correlacionados por el identificador |
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
-| Los otros 10 de la foto | ⬜ abiertos | — | — |
+| `BUG-07` | ✅ corregido | 2026-09-16 | Suite de regresión en dos capas, planificada como cambio de OpenSpec (`regression-test-suite`). Capa 1, lógica pura: 71 tests en ~0,3 s sin BD, LLM ni `.env`. Capa 2, Postgres desechable levantado por pytest: 18 tests en ~8 s, sin tocar la base de desarrollo. Control negativo: 22 de 22 defectos reintroducidos detectados |
+| Los otros 9 de la foto | ⬜ abiertos | — | — |
 | `HYG-05` | ⬜ abierto | 2026-09-14 | Hallazgo nuevo; ver §2 y el plan (§10) |
 | `SEC-07` | 🟡 capa 1 corregida | 2026-09-16 | Hallazgo nuevo, encontrado al corregir `HYG-07`. `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base. Mismo ataque con el código real: con `HEAD`, la contraseña de la víctima acaba en una tabla del atacante sin RLS; con el parche, `CREATE SCHEMA` se deniega y la escritura va a `public`. Abiertas las capas 2 y 3 (residuo de `ALTER ROLE`) |
 
@@ -127,6 +128,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 - **`SEC-05`**: el parche propuesto (opción 1) no bastaba tal como estaba descrito. Guardar la clave en una tabla de `public` "sin `GRANT` a `app_user`" no la protege: `sql/00_create_app_user.sql` deja un `ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user`, así que la tabla nace con un `GRANT` explícito al rol y `REVOKE ... FROM PUBLIC` no lo deshace. La primera versión del parche pasó todas las pruebas de aislamiento y aun así `app_user` podía leer la clave y firmar cualquier tenant; se descubrió porque el control negativo lo comprobaba explícitamente. La clave vive ahora en un esquema propio (`tenant_security`). El `ALTER DEFAULT PRIVILEGES` queda catalogado aparte como `HYG-07`.
 - **`HYG-07`**: el plan (§10, paso 34) proponía "acotar el `ALTER DEFAULT PRIVILEGES` a las cinco tablas de la aplicación", y eso no se puede hacer: los privilegios por defecto se definen por rol, esquema y tipo de objeto, no por nombre de tabla. El parche correcto era el de la propia ficha, borrar la línea. Además, borrarla del script de arranque no basta: la base existente conserva el privilegio en `pg_default_acl` hasta que se revoque.
 - **`PERF-02`**: las tres copias sobrantes del modelo costaban ~102 MB de *physical footprint* medido, no los 270–360 MB estimados. La estimación de que consolidarlas acortaba el arranque sí se confirma: la importación de la API pasa de 16,6 s a 5,6 s.
+- **`BUG-07`**: el parche mínimo de la ficha ya no aplicaba (`tenant_id` pasó a `uuid.UUID`), y corregir el `TypeError` no habría hecho pasar la suite: el juez de DeepEval usa OpenAI por defecto, sin clave, y la pregunta no tiene respuesta en el corpus. Tampoco habría protegido ninguna corrección de esta auditoría.
 
 ---
 
@@ -1495,6 +1497,50 @@ Requiere además `pytest-asyncio` (no declarado; ver `HYG-01`) y una base de dat
 - `route_supervisor` / `route_reviewer` sobre diccionarios de estado construidos a mano → verificar las transiciones sin tocar la red (cubriría `BUG-05` como regresión).
 - `cosine_distance()` con vectores conocidos, incluido el caso de norma cero (`ingestion.py:43`).
 
+**Estado:** ✅ corregido el 2026-09-16. Es el primer hallazgo trabajado como cambio de OpenSpec (`openspec/changes/regression-test-suite/`: propuesta, spec, diseño y tareas).
+
+**La ficha se había quedado corta.** El parche mínimo de arriba ya no aplicaba: `retrieve_documents` recibe ahora un `uuid.UUID`, no un string. Y arreglar el `TypeError` no habría bastado. DeepEval usa OpenAI como juez por defecto, sin clave configurada. La pregunta del test (*pyproject.toml*) no tiene respuesta en el corpus, que es un CV. Y aunque pasara, no protegería ninguna de las correcciones de esta auditoría. Por decisión del usuario, la suite se reorienta a **regresión** y las evaluaciones de calidad quedan para un cambio aparte.
+
+**Qué hay ahora.**
+
+| Capa | Dónde | Qué necesita | Tests | Tiempo |
+|---|---|---|:---:|:---:|
+| 1. Lógica pura | `tests/unit/` | nada: ni BD, ni LLM, ni `.env`, ni Docker | 71 | ~0,3 s |
+| 2. Postgres real | `tests/db/` | Docker; levanta y borra su propia base | 18 | ~8 s |
+| Evals | `tests/evals/` | solo con `--run-evals`; `test_rag.py` sigue sin arreglar | — | — |
+
+- **Capa 1:** política de caché (`BUG-02`, `BUG-06`, `BUG-10`), ventana, agotamiento y decisión del revisor (`BUG-05`), historial (`BUG-03`), nombre de archivo (`SEC-04`), puntuaciones del juez (`DOC-02`) y firma del tenant (`SEC-05`). Un test guardián falla si algún módulo puro arrastra `sentence_transformers`, `flashrank`, `anthropic` o `langgraph`.
+- **Capa 2:** aislamiento con contexto firmado (`SEC-05`), GraphRAG con tokenizador permisivo (`SEC-03`), tenant local a la transacción y conexión reutilizada (`PERF-01`), privilegios de `app_user` (`HYG-07`, `SEC-07`, incluida la vigilancia de `pg_db_role_setting` que quedó pendiente en `SEC-07`) y arranque desde volumen vacío (`BUG-04`).
+- **Extracciones a producción, sin cambiar comportamiento:** para que la capa 1 no pague los ~10 s de importar `chat.py` y `nodes.py`, se movieron a módulos sin efectos al importar: `cache_policy.py`, `agent_graph/routing.py`, `filenames.py` y `models/evaluation.py`. Dos piezas estaban escritas en línea (la decisión de agotamiento y el saneado del nombre). Comprobado: los mismos tests en verde antes y después, el grafo compilado idéntico, 4900 combinaciones del agotamiento sin diferencias, el mismo JSON schema del juez y la API real contra la base de desarrollo (con historial, sin caché; sin historial, escribe; repetida, acierto en 0,0 s).
+
+**Garantías sobre la base de desarrollo.** `tests/conftest.py` fija `DATABASE_URL` al puerto 5439 antes de importar nada de `src`, porque `db.py` fija su base al importarse, con desarrollo como valor por defecto. Un guardián aborta la sesión si `DB_DSN` no apunta a la base de pruebas: comprobado importando `db.py` antes desde un plugin, sale con código 1 sin levantar nada. En una ejecución completa con desarrollo en marcha, 173 muestras de `pg_stat_activity` registraron 0 conexiones por red a desarrollo (el control positivo sí detecta una), con los mismos recuentos, contenedor y volumen.
+
+**Ciclo de la base desechable.** Proyecto Compose `sandbox_tests`, volumen `sandbox_tests_pgdata` borrado por nombre exacto y solo si es de ese proyecto. Tras un test fallido no quedan restos. Tras un `kill -9` quedan contenedor y volumen, y la siguiente ejecución los limpia al empezar. Sin Docker (demonio inaccesible o sin binario), la suite completa sale con código 1 y *"No se pudo levantar la base de pruebas"*, y `tests/unit` sola pasa.
+
+**Control negativo: 22 de 22.** Cada defecto se reintrodujo en el código o en `sql/`, se ejecutó su capa y se restauró.
+
+| Hallazgo | Reintroducido | Fallan |
+|---|---|:---:|
+| `BUG-02` | cachear cualquier respuesta / quitar la lista blanca | 10 / 5 |
+| `BUG-06` | ignorar `top_k` propios / quitar `ge`/`le` | 3 / 3 |
+| `BUG-10` | ignorar el historial | 1 |
+| `BUG-05` | ventana fija / revisor sin agotamiento / nunca agotada / sin tope | 7 / 1 / 3 / 6 |
+| `BUG-03` | descartar el historial / sin ventana / `msg["role"]` | 2 / 1 / 3 |
+| `SEC-04` | nombre tal cual / `basename` sin normalizar `\` | 8 / 2 |
+| `DOC-02` | puntuaciones sin `ge`/`le` | 6 |
+| `SEC-05` | políticas sobre `current_setting` sin firma | 5 |
+| `SEC-03` | `WHERE` por concatenación | 2 |
+| `PERF-01` | `set_config(..., false)` | 1 |
+| `HYG-07` | `ALTER DEFAULT PRIVILEGES` de vuelta | 1 |
+| `SEC-07` | `GRANT ALL` sobre la base / `ALTER ROLE ... SET search_path` guardado | 1 / 1 |
+| `BUG-04` | `00_create_app_user.sql` renombrado a `02_` | sesión con código 1 |
+
+Dos escenarios de la spec se añadieron al implementar, porque sin ellos el test no detectaba la vuelta de su defecto. Con concatenación en GraphRAG, la lectura entre tenants **sigue bloqueada** por la firma de `SEC-05`: solo la tautología y el apóstrofo distinguen `SEC-03`. Con `set_config(..., false)`, el `RESET ALL` de asyncpg **oculta** la fuga en el pool real: hace falta un pool sin reset para comprobar la defensa propia.
+
+**Configuración.** `pytest` y `pytest-asyncio` pasan al grupo `dev` (con `--no-sync`, ver `HYG-01`). `testpaths = ["tests"]`, así que los `test_*.py` de la raíz (`HYG-02`) ya no se recogen. Además, `-p no:deepeval`: su plugin se cargaba en cada ejecución (~1,7 s, importa `anthropic` y `openai`). La suite se ejecuta con `uv run pytest`, y la capa pura sola con `uv run pytest tests/unit`.
+
+**Fuera de este cambio.** La capa de API con dobles (`SEC-01`, `SEC-02` en el borde, `SEC-06`, `BUG-01`, `BUG-09`), que es el siguiente cambio. Las evals de calidad (`test_rag.py`, juez, `deepeval` en producción, la afirmación del README). Los tests de `chunk_text` y `cosine_distance` que sugería la ficha, que no protegen ninguna corrección y viven en un módulo que carga modelos. Las mediciones de rendimiento y de Docker (`PERF-02` a `PERF-04`, `DOC-01`, `HYG-06`, `HYG-08`, `DOC-03`), que siguen siendo manuales.
+
 ---
 
 ### `BUG-08` 🟠 El caché del re-ranker vive en `/tmp` y su pérdida deja la app sin arrancar
@@ -2701,6 +2747,8 @@ grep -rn "^import jwt\|^import numpy\|import numpy as np" src/
 +]
 ```
 
+**Ya no es solo un riesgo (comprobado el 2026-09-16).** `pyjwt` no figura ni en `pyproject.toml` ni en `uv.lock`, y `uv sync`, que el README manda ejecutar, deja el entorno exactamente como dice el lockfile. `uv sync --dry-run` sobre el `.venv` del proyecto: *"Would uninstall 10 packages"*, entre ellos `pyjwt==2.13.0`, que importa `src/api/auth.py:9`. Así que seguir el README desde un clon limpio produce una API que no arranca. `uv run` no lo sufre, porque sincroniza sin desinstalar lo que sobra. Por eso `BUG-07` movió `pytest` al grupo `dev` con `uv add --dev --no-sync` y la suite se ejecuta con `uv run pytest`. `pytest-asyncio` ya está declarado.
+
 **Nota sobre los pines sin commitear.** El diff pendiente en el árbol de trabajo fija tres versiones exactas (`anthropic==1.4.0`, `deepeval==4.2.1`, `streamlit==1.63.0`) donde antes había rangos. Fijar es defendible para reproducibilidad, pero conviene que sea una decisión consciente y documentada, no un residuo de depuración — y `uv.lock` ya garantiza la reproducibilidad exacta por sí solo.
 
 ---
@@ -3077,7 +3125,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | 36 | 🟡 capa 1 hecha (2026-09-16): `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base, y migración para la existente. Pendiente decidir si se neutraliza `search_path` en la aplicación y se vigila `pg_db_role_setting` (junto a `BUG-07`) | `SEC-07` | 1 | 20 min (capa 1) |
 | D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
-Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`).
+Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`). Hecho el 2026-09-16: desde entonces, la mayoría viven en `tests/unit/` y `tests/db/`.
 
 ### Bloque 0 — Desbloqueo (prerrequisito de todo lo demás)
 
@@ -3144,7 +3192,7 @@ El paso 12 debe hacerse **junto** a la corrección de `SEC-02`: con pool, `SET a
 | 25 | Borrar los 9 archivos muertos y `IngestRequest` | `HYG-02` |
 | 26 | Ampliar `.gitignore`; `git rm --cached .idea uvicorn.log` | `HYG-03` |
 | 27 | `datetime.now(timezone.utc)` | `HYG-04` |
-| 28 | Reparar o retirar `tests/test_rag.py`; añadir tests unitarios de `chunk_text` y de las funciones de ruteo | `BUG-07` |
+| 28 | ✅ hecho (2026-09-16). Suite de regresión en dos capas (lógica pura y Postgres desechable) con control negativo por hallazgo; `test_rag.py` apartado en `tests/evals/` para el cambio de evals | `BUG-07` |
 
 El paso 28 tiene valor propio: tests unitarios de `route_supervisor` / `route_reviewer` sobre diccionarios construidos a mano capturarían `BUG-05` como regresión y no requieren base de datos ni API.
 
