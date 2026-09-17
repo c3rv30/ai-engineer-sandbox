@@ -106,6 +106,7 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `SEC-05` | ✅ corregido | 2026-09-15 | Contexto de tenant firmado (HMAC-SHA256) verificado por una función `SECURITY DEFINER`. Contra la BD real, como `app_user`: la inyección del hallazgo pasa de leer **10 tripletas ajenas a 0**; sin firma o con firma falsa, 0 filas. Contra la API real: con la clave correcta, 4 fuentes y confianza 0,95; con una equivocada, 0 fuentes |
 | `BUG-07` | ✅ corregido | 2026-09-16 | Suite de regresión en dos capas, planificada como cambio de OpenSpec (`regression-test-suite`). Capa 1, lógica pura: 71 tests en ~0,3 s sin BD, LLM ni `.env`. Capa 2, Postgres desechable levantado por pytest: 18 tests en ~8 s, sin tocar la base de desarrollo. Control negativo: 22 de 22 defectos reintroducidos detectados |
 | Capa de API | ✅ añadida | 2026-09-17 | Tercera capa de la suite, con dobles del grafo y de los servicios (cambio de OpenSpec `api-regression-layer`): 40 tests sin Docker que fijan `SEC-01`, `SEC-02`, `SEC-06`, `BUG-01` y `BUG-09`. Control negativo: 9 de 9. Sin cambios en producción |
+| `HYG-09` | ✅ corregido | 2026-09-17 | Telemetría de `onnxruntime` desactivada antes de importar FlashRank, en `reranker.py` y en `tests/conftest.py`. La suite completa pasa de abortar 7 de cada 8 veces a 0 de 10; mismo re-ranking antes y después |
 | Los otros 9 de la foto | ⬜ abiertos | — | — |
 | `HYG-05` | ⬜ abierto | 2026-09-14 | Hallazgo nuevo; ver §2 y el plan (§10) |
 | `SEC-07` | 🟡 capa 1 corregida | 2026-09-16 | Hallazgo nuevo, encontrado al corregir `HYG-07`. `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base. Mismo ataque con el código real: con `HEAD`, la contraseña de la víctima acaba en una tabla del atacante sin RLS; con el parche, `CREATE SCHEMA` se deniega y la escritura va a `public`. Abiertas las capas 2 y 3 (residuo de `ALTER ROLE`) |
@@ -3093,7 +3094,21 @@ Solo aparecía en la suite completa, la única que carga FlashRank (al importar 
 
 **Parche aplicado (solo en los tests).** `tests/conftest.py` llama a `onnxruntime.disable_telemetry_events()` antes de que nada importe el re-ranker. Medido: de 7 fallos en 8 ejecuciones a **0 en 20**. Desactivarla más tarde no basta: haciéndolo al importar la aplicación, aún fallaban 2 de 8, porque el hilo ya estaba en marcha.
 
-**Decisión pendiente.** La misma llamada en `src/services/reranker.py`, antes de crear el `Ranker`, protegería a cualquier proceso de la aplicación. Es una línea, pero es producción y su efecto ahí no está medido, así que lo decide el usuario.
+**Estado:** ✅ corregido el 2026-09-17, a petición del usuario, en los dos sitios.
+
+`src/services/reranker.py` desactiva la telemetría **antes de importar FlashRank**. El sitio importa: la primera versión del parche la desactivaba justo antes de crear el `Ranker`, ya con `onnxruntime` importado por la línea `from flashrank import ...`, y no bastaba.
+
+| Configuración | Ejecuciones de la suite completa que abortan |
+|---|:---:|
+| Sin nada | 7 de 8 |
+| Solo `reranker.py`, después de importar FlashRank | 3 de 8 |
+| Solo `reranker.py`, antes de importar FlashRank | 1 de 8 |
+| Solo `tests/conftest.py` | 0 de 20 |
+| Las dos | 0 de 10 |
+
+Desactivarla antes reduce la ventana, no la cierra: cuanto antes se haga, más tiempo tiene la petición en vuelo de terminar durante la ejecución y no en el cierre. Por eso se quedan las dos, y la de producción protege también a la API, la ingesta y cualquier script que cargue el re-ranker.
+
+**Control de que no cambia nada.** El mismo re-ranking antes y después del parche, con cuatro documentos y una pregunta fija: `d1` 0,99872, `d4` 0,370157, `d3` 0,000014, en ese orden.
 
 ---
 
@@ -3162,7 +3177,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | 32 | `src/config.py` con `load_dotenv()` antes de crear clientes | `HYG-05` | 5 | 20 min |
 | 33 | ✅ hecho (2026-09-16). `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
 | 36 | 🟡 capa 1 hecha (2026-09-16): `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base, y migración para la existente. Pendiente decidir si se neutraliza `search_path` en la aplicación y se vigila `pg_db_role_setting` (junto a `BUG-07`) | `SEC-07` | 1 | 20 min (capa 1) |
-| 37 | Decidir si `disable_telemetry_events()` entra también en `reranker.py`, no solo en los tests | `HYG-09` | 5 | 5 min |
+| 37 | ✅ hecho (2026-09-17). `disable_telemetry_events()` antes de importar FlashRank, en `reranker.py` y en los tests | `HYG-09` | 5 | 5 min |
 | D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
 Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`). Hecho el 2026-09-16: desde entonces, la mayoría viven en `tests/unit/` y `tests/db/`.

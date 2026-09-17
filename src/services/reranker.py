@@ -3,6 +3,18 @@ import os
 import shutil
 from pathlib import Path
 from typing import List
+# Antes de importar FlashRank: arrastra onnxruntime, que trae compilado un cliente de
+# telemetría con su propio hilo. Si una de sus respuestas HTTP llega cuando el
+# intérprete ya está cerrando, el proceso aborta con código 134 ("recursive_mutex lock
+# failed") después de haber terminado su trabajo (HYG-09). Desactivarla después de
+# importar FlashRank no basta: el hilo ya está en marcha.
+try:
+    import onnxruntime
+
+    onnxruntime.disable_telemetry_events()
+except Exception as e:  # onnxruntime llega como dependencia de FlashRank, no propia
+    print(f"No se pudo desactivar la telemetría de onnxruntime: {type(e).__name__}")
+
 from flashrank import Ranker, RerankRequest
 from flashrank.Config import model_file_map
 from langfuse import observe
