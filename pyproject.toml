@@ -41,6 +41,7 @@ addopts = ["--strict-markers", "-p", "no:deepeval"]
 markers = [
     "db: necesita la base PostgreSQL desechable que levanta tests/db/conftest.py",
     "eval: evaluación de calidad con juez LLM; solo se recoge con --run-evals",
+    "api: ejercita la API con TestClient y dobles del grafo y de los servicios; no necesita Docker",
 ]
 asyncio_mode = "auto"
 # Un único event loop para toda la sesión: el pool de src/services/db.py es uno por

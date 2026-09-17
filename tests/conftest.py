@@ -28,6 +28,17 @@ if os.environ.get("_SANDBOX_TESTS_PID") != str(os.getpid()):
 # Un solo pool para toda la capa de base de datos; no hace falta reservar cinco conexiones.
 os.environ["DB_POOL_MIN_SIZE"] = "1"
 
+# La telemetría de onnxruntime (llega con FlashRank) lanza un hilo que procesa
+# respuestas HTTP. Si alguna llega cuando el intérprete ya está cerrando, aborta el
+# proceso con código 134 ("recursive_mutex lock failed") después de que todos los tests
+# hayan pasado. Se desactiva aquí, antes de que nada importe el re-ranker.
+try:
+    import onnxruntime
+
+    onnxruntime.disable_telemetry_events()
+except Exception:  # onnxruntime es una dependencia transitiva: si no está, no hay nada que desactivar
+    pass
+
 EVALS_DIR = Path(__file__).parent / "evals"
 
 
