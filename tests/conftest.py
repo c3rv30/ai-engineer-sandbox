@@ -17,9 +17,14 @@ TEST_DB_DSN = f"postgresql://app_user:apppassword@127.0.0.1:{TEST_DB_PORT}/postg
 
 os.environ["DATABASE_URL"] = TEST_DB_DSN
 # Claves propias de cada ejecución: la de firma se pasa también a Compose, que siembra
-# con ella la base desechable. Ninguna coincide con las del .env de desarrollo.
-os.environ["TENANT_SIGNING_KEY"] = secrets.token_hex(32)
-os.environ["JWT_SECRET_KEY"] = secrets.token_hex(32)
+# con ella la base desechable. Ninguna coincide con las del .env de desarrollo. Se
+# generan una sola vez por proceso aunque este módulo llegara a importarse dos veces
+# (tests/db/conftest.py importa TEST_DB_PORT de aquí): cambiarlas a mitad de sesión
+# dejaría la firma de la aplicación sin cuadrar con la de la base.
+if os.environ.get("_SANDBOX_TESTS_PID") != str(os.getpid()):
+    os.environ["TENANT_SIGNING_KEY"] = secrets.token_hex(32)
+    os.environ["JWT_SECRET_KEY"] = secrets.token_hex(32)
+    os.environ["_SANDBOX_TESTS_PID"] = str(os.getpid())
 # Un solo pool para toda la capa de base de datos; no hace falta reservar cinco conexiones.
 os.environ["DB_POOL_MIN_SIZE"] = "1"
 
