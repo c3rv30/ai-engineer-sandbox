@@ -1,15 +1,15 @@
 # GraphRAG Architecture Document
 
-## Visión General
-Se implementó un motor básico pero muy poderoso de **GraphRAG (Grafos de Conocimiento RAG)** apoyado sobre PostgreSQL. En lugar de utilizar una base de datos de grafos dedicada como Neo4j, aprovechamos la robustez relacional de Postgres para almacenar tripletas (nodos y relaciones) conectadas por claves foráneas a los chunks vectoriales, operando bajo el mismo motor de seguridad Multi-Tenant (RLS).
+## Overview
+A basic but very powerful **GraphRAG (knowledge graph RAG)** engine was implemented on top of PostgreSQL. Instead of a dedicated graph database such as Neo4j, we use Postgres's relational robustness to store triples (nodes and relations) linked by foreign keys to the vector chunks, running under the same multi-tenant security engine (RLS).
 
-Esta estrategia permite que el LLM no solo busque fragmentos de texto semánticamente similares (Vector Search) o coincidencias de palabras clave (BM25), sino que reciba un **Contexto Estructural** explícito de cómo se relacionan las entidades mencionadas en la pregunta.
+This strategy lets the LLM not only search for semantically similar text chunks (vector search) or keyword matches (BM25), but also receive explicit **structural context** about how the entities mentioned in the question relate to each other.
 
 ---
 
-## 1. Esquema de Base de Datos (PostgreSQL)
+## 1. Database schema (PostgreSQL)
 
-Se creó la tabla `knowledge_graph` diseñada para almacenar las tripletas generadas:
+The `knowledge_graph` table was created to store the generated triples:
 
 ```sql
 CREATE TABLE knowledge_graph (
@@ -21,25 +21,25 @@ CREATE TABLE knowledge_graph (
     source_chunk_id UUID REFERENCES documents(id) ON DELETE CASCADE
 );
 
--- Índices B-Tree para búsquedas ultra rápidas de entidades
+-- B-tree indexes for very fast entity lookups
 CREATE INDEX kg_source_idx ON knowledge_graph(source_node);
 CREATE INDEX kg_target_idx ON knowledge_graph(target_node);
 
--- Aislamiento de Seguridad (Row-Level Security)
+-- Security isolation (Row-Level Security)
 ALTER TABLE knowledge_graph ENABLE ROW LEVEL SECURITY;
 CREATE POLICY kg_tenant_isolation_policy ON knowledge_graph 
     USING (tenant_id = NULLIF(current_setting('app.current_tenant', TRUE), '')::UUID);
 ```
 
-### Decisiones de Diseño:
-- **`source_chunk_id`**: Traza la procedencia exacta de la tripleta hacia el fragmento de texto original (`documents.id`). Permite borrados en cascada (`ON DELETE CASCADE`), por lo que al borrar un documento se limpia automáticamente el grafo asociado.
-- **Multi-Tenancy**: Al igual que `documents`, las tripletas quedan invisibles entre tenants (usuarios) mediante RLS.
+### Design decisions:
+- **`source_chunk_id`**: traces the exact provenance of the triple back to the original text chunk (`documents.id`). It allows cascading deletes (`ON DELETE CASCADE`), so deleting a document automatically cleans up its graph.
+- **Multi-tenancy**: like `documents`, the triples are invisible across tenants (users) through RLS.
 
 ---
 
-## 2. Flujo de Ingestión (LLM-as-a-Judge)
+## 2. Ingestion flow (LLM-as-a-Judge)
 
-Cuando un archivo ingresa al sistema, el procesamiento de GraphRAG ocurre de forma **asíncrona y paralela** a la vectorización.
+When a file enters the system, GraphRAG processing happens **asynchronously and in parallel** with vectorization.
 
 ```mermaid
 sequenceDiagram
@@ -50,24 +50,24 @@ sequenceDiagram
     participant Claude as Claude Haiku (Instructor)
     participant GraphDB as Postgres (knowledge_graph)
 
-    User->>IngestRouter: Sube Archivo (PDF, MD, Img)
-    IngestRouter->>IngestRouter: Extrae texto y hace Chunks
-    IngestRouter->>VectorDB: Genera Embeddings e inserta (RETURNING id)
-    VectorDB-->>IngestRouter: Devuelve IDs generados
+    User->>IngestRouter: Uploads a file (PDF, MD, Img)
+    IngestRouter->>IngestRouter: Extracts text and chunks it
+    IngestRouter->>VectorDB: Generates embeddings and inserts (RETURNING id)
+    VectorDB-->>IngestRouter: Returns the generated IDs
     
-    note over IngestRouter,GraphDB: Ejecución Concurrente por Chunk (asyncio.gather)
+    note over IngestRouter,GraphDB: Concurrent execution per chunk (asyncio.gather)
     
-    loop Para cada Chunk
-        IngestRouter->>GraphPipeline: Enviar texto y chunk_id
-        GraphPipeline->>Claude: Prompt: Extraer Entidades y Relaciones (JSON)
-        Claude-->>GraphPipeline: Lista de Tripletas (Pydantic Model)
-        GraphPipeline->>GraphPipeline: Normalización (lowercase)
+    loop For each chunk
+        IngestRouter->>GraphPipeline: Send text and chunk_id
+        GraphPipeline->>Claude: Prompt: extract entities and relations (JSON)
+        Claude-->>GraphPipeline: List of triples (Pydantic model)
+        GraphPipeline->>GraphPipeline: Normalization (lowercase)
         GraphPipeline->>GraphDB: INSERT INTO knowledge_graph
     end
 ```
 
-### Componentes Clave (`src/services/graphrag.py`):
-- Usamos `instructor` para forzar a Claude a retornar un esquema estricto Pydantic:
+### Key components (`src/services/graphrag.py`):
+- We use `instructor` to force Claude to return a strict Pydantic schema:
 ```python
 class Triplet(BaseModel):
     source_node: str
@@ -80,33 +80,33 @@ class KnowledgeGraphExtraction(BaseModel):
 
 ---
 
-## 3. Flujo de Recuperación (Retrieval & Generation)
+## 3. Retrieval flow (retrieval & generation)
 
-Al momento de responder una consulta, GraphRAG interviene inyectando relaciones explícitas antes de que se genere la respuesta.
+When answering a query, GraphRAG steps in by injecting explicit relations before the answer is generated.
 
 ```mermaid
 flowchart TD
-    Q[Pregunta del Usuario] --> Router[Agentic Router]
+    Q[User Question] --> Router[Agentic Router]
     
     Router -->|Query| VSearch[Hybrid Search\npgvector + FTS BM25]
-    Router -->|Keywords| GSearch[Sub-Graph Search\nILIKE en Nodos]
+    Router -->|Keywords| GSearch[Sub-Graph Search\nILIKE on Nodes]
     
     VSearch -->|Top 15 Chunks| Reranker[FlashRank\nCross-Encoder]
-    Reranker -->|Top 5 Chunks| ContextPool{Pool de Contexto}
+    Reranker -->|Top 5 Chunks| ContextPool{Context Pool}
     
-    GSearch -->|Tripletas coincidentes| Formatter[Formateo Estructural]
-    Formatter -->|Contexto GraphRAG| Inyector[Inyección Forzada (Index 0)]
+    GSearch -->|Matching triples| Formatter[Structural Formatting]
+    Formatter -->|GraphRAG Context| Inyector[Forced Injection (Index 0)]
     
     Inyector --> ContextPool
     
     ContextPool --> LLM[Claude Haiku]
-    LLM --> Answer[Respuesta Generada (SSE Stream)]
+    LLM --> Answer[Generated Answer (SSE Stream)]
 ```
 
-### Detalles de Implementación (`src/api/routers/chat.py` & `src/services/graphrag.py`):
-1. **Extracción Simple de Nodos**: Para evitar latencia usando un LLM en tiempo real, extraemos tokens (palabras clave > 3 letras) directo de la query del usuario.
-2. **Búsqueda Difusa (ILIKE)**: Buscamos en Postgres si existe alguna relación donde el nodo origen o destino contenga esa palabra clave (ej. si la pregunta es sobre "Python", busca nodos que contengan `%python%`).
-3. **Inyección Blindada**: El texto resultante (`[Bryan] --(sabe)--> [Python]`) **NO pasa por el Reranker**. Se salta el modelo Cross-Encoder y se inyecta por la fuerza en la posición `0` de la lista final de resultados:
+### Implementation details (`src/api/routers/chat.py` & `src/services/graphrag.py`):
+1. **Simple node extraction**: to avoid the latency of a real-time LLM call, we extract tokens (keywords > 3 letters) straight from the user's query.
+2. **Fuzzy search (ILIKE)**: we look in Postgres for any relation whose source or target node contains that keyword (e.g. if the question is about "Python", it looks for nodes containing `%python%`).
+3. **Guaranteed injection**: the resulting text (`[Bryan] --(knows)--> [Python]`) **does NOT go through the reranker**. It skips the cross-encoder model and is force-injected at position `0` of the final result list:
 ```python
 if graph_context:
     best_results.insert(0, SearchResult(
@@ -116,12 +116,12 @@ if graph_context:
         score=1.0
     ))
 ```
-**¿Por qué?** Porque los modelos Rerankers basados en BERT están entrenados para puntuar prosa natural. Suelen penalizar textos altamente estructurados y sintéticos (como listas de tripletas), dándoles un score bajo y descartándolos. Al inyectarlo *después* del Reranker, garantizamos que el LLM final siempre lo lea.
+**Why?** Because BERT-based reranker models are trained to score natural prose. They tend to penalize highly structured, synthetic text (such as lists of triples), giving it a low score and discarding it. Injecting it *after* the reranker guarantees that the final LLM always reads it.
 
 ---
 
-## 4. Estructura de Archivos Modificada
-* `sql/01_init.sql`: Definición de tablas DDL (incluida `knowledge_graph`) y Row-Level Security. Para una base ya existente, la migración equivalente es `sql/migrations/apply_graphrag.sql`.
-* `src/services/graphrag.py`: Contiene lógica de Extracción (LLM) y Recuperación (SQL).
-* `src/services/ingestion.py`: Modificado para retornar IDs tras la inserción y orquestar las tareas asíncronas de GraphRAG usando `asyncio.gather`.
-* `src/api/routers/chat.py`: Inyección del sub-grafo en el endpoint síncrono (`/chat/`) y asíncrono SSE (`/chat/stream/`).
+## 4. Files changed
+* `sql/01_init.sql`: DDL table definitions (including `knowledge_graph`) and Row-Level Security. For an existing database, the equivalent migration is `sql/migrations/apply_graphrag.sql`.
+* `src/services/graphrag.py`: holds the extraction (LLM) and retrieval (SQL) logic.
+* `src/services/ingestion.py`: changed to return IDs after the insert and to orchestrate the asynchronous GraphRAG tasks with `asyncio.gather`.
+* `src/api/routers/chat.py`: injection of the subgraph in the synchronous (`/chat/`) and asynchronous SSE (`/chat/stream/`) endpoints.

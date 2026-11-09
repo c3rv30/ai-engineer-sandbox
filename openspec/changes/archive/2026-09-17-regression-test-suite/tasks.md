@@ -1,85 +1,85 @@
-## 1. Configuración de pytest y dependencias
+## 1. pytest configuration and dependencies
 
-- [x] 1.1 En `pyproject.toml`, sacar `pytest` de `dependencies` y crear `[dependency-groups] dev` con `pytest` y `pytest-asyncio`, con `uv remove`/`uv add --dev` y `--no-sync` (nunca `uv sync`: desinstalaría `pyjwt`, que no está declarado, `HYG-01`); verificar que `uv run pytest --version` responde y que el `.venv` conserva `pyjwt`
-- [x] 1.2 Añadir `[tool.pytest.ini_options]` con `testpaths = ["tests"]`, los marcadores `db` y `eval`, `--strict-markers` y el `loop_scope` de pytest-asyncio (design D9); verificar que `uv run pytest --collect-only` no recoge ningún `test_*.py` de la raíz
-- [x] 1.3 Crear `tests/unit/`, `tests/db/` y `tests/evals/`, mover `tests/test_rag.py` a `tests/evals/` y excluirlo de la recolección salvo con `--run-evals` (D9); verificar que `uv run pytest --collect-only` no importa `deepeval` y que `--run-evals` sí lo recoge
-- [x] 1.4 Crear `tests/conftest.py`, que fija `DATABASE_URL` (puerto 5439), `TENANT_SIGNING_KEY` y `JWT_SECRET_KEY` aleatorias y `DB_POOL_MIN_SIZE=1` antes de cualquier importación de `src` (D5); verificar con un test temporal que `src.services.db.DB_DSN` apunta al 5439 aunque exista el `.env` de desarrollo
+- [x] 1.1 In `pyproject.toml`, take `pytest` out of `dependencies` and create `[dependency-groups] dev` with `pytest` and `pytest-asyncio`, using `uv remove`/`uv add --dev` and `--no-sync` (never `uv sync`: it would uninstall `pyjwt`, which is not declared, `HYG-01`); verify that `uv run pytest --version` answers and that the `.venv` keeps `pyjwt`
+- [x] 1.2 Add `[tool.pytest.ini_options]` with `testpaths = ["tests"]`, the `db` and `eval` markers, `--strict-markers` and pytest-asyncio's `loop_scope` (design D9); verify that `uv run pytest --collect-only` collects no `test_*.py` from the root
+- [x] 1.3 Create `tests/unit/`, `tests/db/` and `tests/evals/`, move `tests/test_rag.py` to `tests/evals/` and exclude it from collection unless `--run-evals` is passed (D9); verify that `uv run pytest --collect-only` does not import `deepeval` and that `--run-evals` does collect it
+- [x] 1.4 Create `tests/conftest.py`, which sets `DATABASE_URL` (port 5439), random `TENANT_SIGNING_KEY` and `JWT_SECRET_KEY` and `DB_POOL_MIN_SIZE=1` before any import of `src` (D5); verify with a temporary test that `src.services.db.DB_DSN` points to 5439 even with the development `.env` present
 
-## 2. Capa 1 contra el código actual
+## 2. Layer 1 against the current code
 
-- [x] 2.1 Escribir en `tests/unit/` los tests de la política de caché (spec: *Regresión de la política de caché*), importando de `src.api.routers.chat`; verificar que pasan
-- [x] 2.2 Escribir los tests de la ventana de recuperación y de `route_reviewer` (spec: *Regresión del ciclo de auto-corrección*, salvo *Corpus agotado* y *Ventana saturada*, que dependen de la extracción de 3.3), importando de `nodes.py` y `graph.py`; verificar que pasan
-- [x] 2.3 Escribir los tests de `format_history` (spec: *Regresión del historial de conversación*); verificar que pasan
-- [x] 2.4 Escribir el test de límites de `RAGEvaluation` (spec: *Regresión de los límites de las puntuaciones del evaluador*), importando de `src.services.evaluator`; verificar que pasa
-- [x] 2.5 Escribir el test de `sign_tenant` contra un HMAC-SHA256 calculado en el propio test con la biblioteca estándar; verificar que pasa (la comparación con el HMAC de la base se hace en 6.1)
+- [x] 2.1 Write the cache policy tests in `tests/unit/` (spec: *Cache policy regression*), importing from `src.api.routers.chat`; verify that they pass
+- [x] 2.2 Write the tests of the retrieval window and of `route_reviewer` (spec: *Self-correction loop regression*, except *Exhausted corpus* and *Saturated window*, which depend on the extraction in 3.3), importing from `nodes.py` and `graph.py`; verify that they pass
+- [x] 2.3 Write the `format_history` tests (spec: *Conversation history regression*); verify that they pass
+- [x] 2.4 Write the bounds test of `RAGEvaluation` (spec: *Evaluator score bounds regression*), importing from `src.services.evaluator`; verify that it passes
+- [x] 2.5 Write the `sign_tenant` test against an HMAC-SHA256 computed in the test itself with the standard library; verify that it passes (the comparison with the database's HMAC is done in 6.1)
 
-## 3. Extracciones sin cambio de comportamiento
+## 3. Extractions without behavior change
 
-- [x] 3.1 Mover la política de caché a `src/services/cache_policy.py` y hacer que `chat.py` la importe de ahí (D2); verificar que los tests de 2.1, apuntando al módulo nuevo, dan los mismos resultados y que `from src.api.routers.chat import is_cache_eligible` sigue funcionando
-- [x] 3.2 Mover `retrieval_window`, `route_supervisor` y `route_reviewer` a `src/services/agent_graph/routing.py`, importados desde `nodes.py` y `graph.py`; verificar que los tests de 2.2, apuntando al módulo nuevo, dan los mismos resultados
-- [x] 3.3 Extraer a `routing.py` la decisión de agotamiento que hoy está en línea en `researcher_node`, como función con las mismas entradas (tamaños de resultados, candidatos únicos, ventana actual y base), y usarla desde `researcher_node`; escribir los escenarios *Corpus agotado* y *Ventana saturada* y verificar que pasan
-- [x] 3.4 Extraer el saneado del nombre de origen a `src/services/filenames.py` y usarlo desde `ingest_endpoint`; escribir los tests de *Regresión del nombre de archivo en la ingesta* (con `/`, `\` y `..`) y verificar que pasan
-- [x] 3.5 Mover `RAGEvaluation` a `src/models/evaluation.py`, importado desde `evaluator.py`; verificar que el test de 2.4, apuntando al módulo nuevo, pasa
-- [x] 3.6 Arrancar la API real contra la base de desarrollo, hacer una pregunta de conocimiento con historial y otra sin él, y comprobar que responden y que el caché se usa solo en la segunda; verificar además que la base de desarrollo queda con los recuentos iniciales (purgando lo que escriban la petición y sus tareas en segundo plano)
+- [x] 3.1 Move the cache policy to `src/services/cache_policy.py` and have `chat.py` import it from there (D2); verify that the tests from 2.1, pointing at the new module, give the same results and that `from src.api.routers.chat import is_cache_eligible` still works
+- [x] 3.2 Move `retrieval_window`, `route_supervisor` and `route_reviewer` to `src/services/agent_graph/routing.py`, imported from `nodes.py` and `graph.py`; verify that the tests from 2.2, pointing at the new module, give the same results
+- [x] 3.3 Extract to `routing.py` the exhaustion decision that is inline in `researcher_node` today, as a function with the same inputs (result sizes, unique candidates, current window and base), and use it from `researcher_node`; write the *Exhausted corpus* and *Saturated window* scenarios and verify that they pass
+- [x] 3.4 Extract the origin name sanitizing to `src/services/filenames.py` and use it from `ingest_endpoint`; write the *Ingestion file name regression* tests (with `/`, `\` and `..`) and verify that they pass
+- [x] 3.5 Move `RAGEvaluation` to `src/models/evaluation.py`, imported from `evaluator.py`; verify that the test from 2.4, pointing at the new module, passes
+- [x] 3.6 Start the real API against the development database, ask one knowledge question with history and another without, and check that they answer and that the cache is used only by the second; also verify that the development database is left with the initial counts (purging whatever the request and its background tasks write)
 
-## 4. Pureza de la capa 1
+## 4. Purity of layer 1
 
-- [x] 4.1 Escribir el test guardián (D3): importa en un subproceso limpio todos los módulos que usa `tests/unit/` y comprueba que `sys.modules` no contiene `sentence_transformers`, `flashrank`, `anthropic` ni `langgraph`; verificar que pasa y que falla si se añade `import src.services.agent_graph.nodes` a la lista
-- [x] 4.2 Ejecutar `uv run pytest tests/unit` en un clon limpio, sin `.env` y con Docker parado; verificar que todo pasa en segundos (spec: *Clon sin configuración* y *Selección explícita de la capa pura*)
+- [x] 4.1 Write the guard test (D3): it imports, in a clean subprocess, every module `tests/unit/` uses and checks that `sys.modules` contains neither `sentence_transformers`, `flashrank`, `anthropic` nor `langgraph`; verify that it passes and that it fails if `import src.services.agent_graph.nodes` is added to the list
+- [x] 4.2 Run `uv run pytest tests/unit` in a clean clone, without `.env` and with Docker stopped; verify that everything passes in seconds (spec: *Clone without configuration* and *Explicit selection of the pure layer*)
 
-## 5. Base desechable
+## 5. Disposable database
 
-- [x] 5.1 Escribir en `tests/db/conftest.py` el fixture de sesión con el ciclo de D4 (limpieza previa por nombre exacto, `up --wait`, `pytest.fail` si falla, `down` y borrado del volumen en el finalizador) y el marcado automático como `db`; verificar que tras una ejecución no quedan ni contenedor ni volumen `sandbox_tests*`
-- [x] 5.2 Añadir el guardián del DSN (D5) al fixture; verificar que aborta la sesión si `DB_DSN` no apunta al 5439 (forzándolo en una prueba temporal)
-- [x] 5.3 Configurar el event loop de sesión y el cierre del pool (D6); verificar con `pg_stat_activity` durante una ejecución que las conexiones de `app_user` no crecen con el número de tests
-- [x] 5.4 Verificar la limpieza tras un fallo y tras una interrupción: con un test que falla a propósito y con un `kill -9` a mitad de ejecución, la ejecución siguiente arranca limpia y al terminar no queda nada
-- [x] 5.5 Verificar el fallo sin Docker (spec: *Docker no disponible*): con Docker parado, `uv run pytest` termina con fallo, y el mensaje dice que no se pudo levantar la base de pruebas
+- [x] 5.1 Write in `tests/db/conftest.py` the session fixture with the D4 lifecycle (prior cleanup by exact name, `up --wait`, `pytest.fail` if it fails, `down` and volume deletion in the finalizer) and the automatic `db` marking; verify that after a run neither a container nor a `sandbox_tests*` volume remains
+- [x] 5.2 Add the DSN guard (D5) to the fixture; verify that it aborts the session if `DB_DSN` does not point to 5439 (forcing it in a temporary test)
+- [x] 5.3 Configure the session event loop and the pool closing (D6); verify with `pg_stat_activity` during a run that `app_user` connections do not grow with the number of tests
+- [x] 5.4 Verify the cleanup after a failure and after an interruption: with a test that fails on purpose and with a `kill -9` in the middle of a run, the next run starts clean and nothing remains at the end
+- [x] 5.5 Verify the failure without Docker (spec: *Docker not available*): with Docker stopped, `uv run pytest` ends in failure, and the message says the test database could not be started
 
-## 6. Capa 2
+## 6. Layer 2
 
-- [x] 6.1 Escribir los tests de *Regresión del aislamiento entre tenants*: contexto firmado válido (con control positivo), sin firma, firma falsa y tenant reescrito desde la sentencia, a través de `tenant_connection`; completar el escenario *Firma coincidente* comparando `sign_tenant` con el HMAC calculado por la base; verificar que pasan
-- [x] 6.2 Escribir el test de inyección en GraphRAG: sembrar relaciones en dos tenants y llamar a `retrieve_subgraph` con el payload de `SEC-03` desde el tenant sin ellas, con control positivo desde el dueño; añadir, con tokenizador permisivo, la tautología y el apóstrofo (escenario *Palabras de la pregunta como datos*, añadido al implementar: la lectura entre tenants ya la bloquea `SEC-05` y sola no detectaría la vuelta de `SEC-03`); verificar que pasan
-- [x] 6.3 Escribir el test de la conexión reutilizada del pool (`PERF-01`), forzando que la segunda operación reciba la misma conexión física, y el de *Contexto local a la transacción* con un pool sin reset (añadido al implementar: el `RESET ALL` de asyncpg ocultaría un `set_config(..., false)`); verificar que pasan
-- [x] 6.4 Escribir los tests de *Regresión de los privilegios del rol de la aplicación* (tabla nueva, `CREATE SCHEMA`, ajustes guardados del rol, clave de firma); verificar que pasan
-- [x] 6.5 Verificar que la base de desarrollo no se toca: recuentos 22/128/4/3/0 y el mismo volumen `ai_engineer_sandbox_pgdata` antes y después de `uv run pytest` con la base de desarrollo en marcha
+- [x] 6.1 Write the *Tenant isolation regression* tests: valid signed context (with a positive control), no signature, fake signature and tenant rewritten from the statement, through `tenant_connection`; complete the *Matching signature* scenario by comparing `sign_tenant` with the HMAC computed by the database; verify that they pass
+- [x] 6.2 Write the GraphRAG injection test: seed relations in two tenants and call `retrieve_subgraph` with the `SEC-03` payload from the tenant without them, with a positive control from the owner; add, with a permissive tokenizer, the tautology and the apostrophe (scenario *Question words as data*, added during implementation: the cross-tenant read is already blocked by `SEC-05` and on its own would not catch the return of `SEC-03`); verify that they pass
+- [x] 6.3 Write the test of the connection reused from the pool (`PERF-01`), forcing the second operation to get the same physical connection, and the *Transaction-local context* one with a pool without reset (added during implementation: asyncpg's `RESET ALL` would hide a `set_config(..., false)`); verify that they pass
+- [x] 6.4 Write the *Application role privileges regression* tests (new table, `CREATE SCHEMA`, the role's stored settings, signing key); verify that they pass
+- [x] 6.5 Verify that the development database is not touched: counts 22/128/4/3/0 and the same `ai_engineer_sandbox_pgdata` volume before and after `uv run pytest` with the development database running
 
-## 7. Control negativo por hallazgo
+## 7. Negative control per finding
 
-- [x] 7.1 Para cada hallazgo de capa 1 (`BUG-02`, `BUG-06`, `BUG-10`, `BUG-05`, `BUG-03`, `SEC-04`, `DOC-02`), reintroducir el comportamiento anterior (D8), comprobar que falla al menos un test de ese hallazgo y deshacer; anotar aquí qué test falló en cada caso
-- [x] 7.2 Para cada hallazgo de capa 2 (`SEC-05`, `SEC-03`, `PERF-01`, `HYG-07`, `SEC-07`), reintroducir el SQL o el código anterior en la base desechable o en el código (D8), comprobar que falla al menos un test y deshacer; anotar aquí qué test falló en cada caso
-- [x] 7.3 Comprobar el escenario *Base recién creada* (`BUG-04`) rompiendo temporalmente el orden de los scripts de `sql/`: la sesión debe terminar en `pytest.fail`; deshacer
+- [x] 7.1 For each layer 1 finding (`BUG-02`, `BUG-06`, `BUG-10`, `BUG-05`, `BUG-03`, `SEC-04`, `DOC-02`), reintroduce the previous behavior (D8), check that at least one test of that finding fails and undo; note here which test failed in each case
+- [x] 7.2 For each layer 2 finding (`SEC-05`, `SEC-03`, `PERF-01`, `HYG-07`, `SEC-07`), reintroduce the previous SQL or code in the disposable database or in the code (D8), check that at least one test fails and undo; note here which test failed in each case
+- [x] 7.3 Check the *Freshly created database* scenario (`BUG-04`) by temporarily breaking the order of the `sql/` scripts: the session must end in `pytest.fail`; undo
 
-### Resultados del control negativo (2026-09-16)
+### Negative control results (2026-09-16)
 
-Cada mutación se aplicó sobre el código o `sql/`, se ejecutó la capa correspondiente y se restauró con `git checkout` (árbol limpio al terminar; 0 contenedores y 0 volúmenes de prueba tras cada ejecución).
+Each mutation was applied to the code or to `sql/`, the corresponding layer was run and the change was restored with `git checkout` (clean tree at the end; 0 test containers and 0 test volumes after each run).
 
-| Hallazgo | Comportamiento reintroducido | Tests que fallan |
+| Finding | Behavior reintroduced | Tests that fail |
 |---|---|---|
-| `BUG-02` | cachear cualquier respuesta (antes de `d198be1`) | 10: intención no cacheable, confianza insuficiente o ausente, sin campo, pide más información |
-| `BUG-02` | solo quitar la lista blanca de intenciones | 5: intención no cacheable |
-| `BUG-06` | el caché ignora los `top_k` propios | 3: parámetros propios no usan caché |
-| `BUG-06` | `top_k_retrieve` sin `ge`/`le` | 3: parámetros fuera de rango |
-| `BUG-10` | el caché ignora el historial (antes de `82c7aa6`) | 1: petición con historial no usa caché |
-| `BUG-05` | la ventana no se amplía (antes de `e8c63b6`) | 7, entre ellos ampliación por reintento y ventana saturada |
-| `BUG-05` | el revisor ignora `retrieval_exhausted` | 1: no se reintenta si la búsqueda está agotada |
-| `BUG-05` | nunca se considera agotada | 3: corpus agotado, sin variantes, ventana saturada |
-| `BUG-05` | ampliación sin tope en los máximos | 6: tope en los máximos, se estanca, ventana saturada |
-| `BUG-03` | el historial se descarta (defecto original) | 2: ventana de turnos, turnos malformados |
-| `BUG-03` | sin ventana de turnos | 1: ventana de turnos |
-| `BUG-03` | `msg["role"]` sin tolerar turnos malformados | 3: turnos malformados, historial inutilizable |
-| `SEC-04` | nombre del cliente tal cual (antes de `4ea6449`) | 8: último componente, sin separadores |
-| `SEC-04` | `basename` sin normalizar `\` | 2: último componente, sin separadores |
-| `DOC-02` | puntuaciones sin `ge`/`le` (antes de `debf63c`) | 6: puntuación fuera de rango |
-| `SEC-05` | políticas sobre `current_setting`, sin firma (antes de `38316a0`) | 5: sin firma, firma falsa, firma de otro tenant, tenant reescrito, base recién creada |
-| `SEC-03` | `WHERE` por concatenación (antes de `6af7530`) | 2: tautología, apóstrofo. La lectura entre tenants **no** falla: la bloquea `SEC-05`, como se anticipó |
-| `PERF-01` | `set_config(..., false)` en `tenant_connection` | 1: contexto local a la transacción. El test del pool real **no** falla: lo oculta el `RESET ALL`, como se anticipó |
-| `HYG-07` | `ALTER DEFAULT PRIVILEGES` de vuelta (antes de `6216534`) | 1: tabla nueva en `public` |
-| `SEC-07` | `GRANT ALL` sobre la base (antes de `c917833`) | 1: no puede crear esquemas |
-| `SEC-07` | `ALTER ROLE app_user SET search_path` guardado | 1: sin ajustes propios guardados |
-| `BUG-04` | `00_create_app_user.sql` renombrado a `02_` | la sesión termina con código 1: 18 errores, "No se pudo levantar la base de pruebas con docker compose" |
+| `BUG-02` | cache any answer (before `1a35a4d`) | 10: non-cacheable intent, insufficient or missing confidence, no field, asks for more information |
+| `BUG-02` | only remove the intent allowlist | 5: non-cacheable intent |
+| `BUG-06` | the cache ignores custom `top_k` | 3: custom parameters do not use the cache |
+| `BUG-06` | `top_k_retrieve` without `ge`/`le` | 3: out-of-range parameters |
+| `BUG-10` | the cache ignores the history (before `e0fbdfc`) | 1: request with history does not use the cache |
+| `BUG-05` | the window does not widen (before `993163e`) | 7, including widening per retry and saturated window |
+| `BUG-05` | the reviewer ignores `retrieval_exhausted` | 1: no retry if the search is exhausted |
+| `BUG-05` | never considered exhausted | 3: exhausted corpus, no variants, saturated window |
+| `BUG-05` | widening without a cap at the maximums | 6: cap at the maximums, stalls, saturated window |
+| `BUG-03` | the history is discarded (original defect) | 2: turn window, malformed turns |
+| `BUG-03` | no turn window | 1: turn window |
+| `BUG-03` | `msg["role"]` without tolerating malformed turns | 3: malformed turns, unusable history |
+| `SEC-04` | client name as is (before `0ae8cc5`) | 8: last component, no separators |
+| `SEC-04` | `basename` without normalizing `\` | 2: last component, no separators |
+| `DOC-02` | scores without `ge`/`le` (before `4e9cde2`) | 6: out-of-range score |
+| `SEC-05` | policies on `current_setting`, without a signature (before `9100c05`) | 5: no signature, fake signature, another tenant's signature, tenant rewritten, freshly created database |
+| `SEC-03` | `WHERE` by concatenation (before `1ec35e7`) | 2: tautology, apostrophe. The cross-tenant read does **not** fail: `SEC-05` blocks it, as anticipated |
+| `PERF-01` | `set_config(..., false)` in `tenant_connection` | 1: transaction-local context. The real pool test does **not** fail: the `RESET ALL` hides it, as anticipated |
+| `HYG-07` | `ALTER DEFAULT PRIVILEGES` back (before `a1a73e2`) | 1: new table in `public` |
+| `SEC-07` | `GRANT ALL` on the database (before `535af88`) | 1: cannot create schemas |
+| `SEC-07` | stored `ALTER ROLE app_user SET search_path` | 1: no stored settings of its own |
+| `BUG-04` | `00_create_app_user.sql` renamed to `02_` | the session ends with code 1: 18 errors, "Could not start the test database with docker compose" |
 
-## 8. Cierre
+## 8. Wrap-up
 
-- [x] 8.1 Ejecutar `uv run pytest` completo dos veces seguidas; verificar que las dos pasan y que no queda ni contenedor ni volumen de pruebas
-- [x] 8.2 Añadir la línea de estado de `BUG-07` en `docs/AUDITORIA_TECNICA.md` (tabla de §1, ficha y plan §10), con la corrección de que el parche mínimo de la ficha ya no aplicaba, y con la tabla de controles negativos de 7.1 a 7.3; anotar en la ficha de `HYG-01` que `uv sync` desinstala hoy `pyjwt` y deja la API sin arrancar (comprobado con `--dry-run` el 2026-09-16)
-- [x] 8.3 Hacer los commits con las mediciones en el cuerpo, siguiendo la práctica del proyecto; verificar con `git status` que no queda nada sin commitear fuera de lo decidido
+- [x] 8.1 Run the full `uv run pytest` twice in a row; verify that both pass and that no test container or volume remains
+- [x] 8.2 Add the `BUG-07` status line in `docs/TECHNICAL_AUDIT.md` (§1 table, entry and plan §10), with the correction that the entry's minimal patch no longer applied, and with the negative control table from 7.1 to 7.3; note in the `HYG-01` entry that `uv sync` today uninstalls `pyjwt` and leaves the API unable to start (checked with `--dry-run` on 2026-09-16)
+- [x] 8.3 Make the commits with the measurements in the body, following the project's practice; verify with `git status` that nothing is left uncommitted outside what was decided

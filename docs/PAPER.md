@@ -2,240 +2,249 @@
 
 ## 1. Abstract
 
-Los sistemas de Generación Aumentada por Recuperación (RAG) han demostrado ser eficaces para dotar a los Modelos de Lenguaje Grande (LLMs) de conocimiento en dominio específico. Sin embargo, las implementaciones tradicionales sufren de rutinas lineales rígidas, alucinaciones por recuperación deficiente y amnesia contextual a largo plazo. En este documento, presentamos el diseño, la formalización matemática y la implementación de un ecosistema *Multi-Agente* autónomo (AI Engineer Sandbox). 
+Retrieval-Augmented Generation (RAG) systems have proven effective in providing Large Language Models (LLMs) with domain-specific knowledge. However, traditional implementations suffer from rigid linear routines, hallucinations due to poor retrieval, and long-term contextual amnesia. In this paper, we present the design, mathematical formalization, and implementation of an autonomous *Multi-Agent* ecosystem (AI Engineer Sandbox).
 
-Nuestra arquitectura rompe el paradigma lineal utilizando **LangGraph** para orquestar un grafo de estados cíclico (`StateGraph`), donde agentes especializados (Supervisor, Investigador y Generador) se comunican asíncronamente y emplean mecanismos de corrección automática (Self-Correction) ante falta de contexto. Para maximizar la relevancia de recuperación, implementamos un sistema *Two-Stage Retrieval* que fusiona búsqueda híbrida (Vector + BM25 mediante Reciprocal Rank Fusion) con un modelo local de Cross-Encoder (FlashRank), complementado con la extracción de redes semánticas mediante GraphRAG.
+Our architecture breaks the linear paradigm by utilizing **LangGraph** to orchestrate a cyclic state graph (`StateGraph`), where specialized agents (Supervisor, Researcher, and Generator) communicate asynchronously and employ Self-Correction mechanisms when context is lacking. To maximize retrieval relevance, we implemented a *Two-Stage Retrieval* system that fuses hybrid search (Vector + BM25 via Reciprocal Rank Fusion) with a local Cross-Encoder model (FlashRank), complemented by semantic network extraction through GraphRAG.
 
-El sistema resuelve cuellos de botella de producción mediante: (a) *Semantic Chunking* guiado por desviaciones estadísticas de distancia coseno, (b) una Memoria a Largo Plazo y Caché Semántico almacenados en PostgreSQL (`pgvector`) bajo estrictas políticas de Row-Level Security (RLS) para arquitecturas Multi-Tenant, y (c) un evaluador pasivo asíncrono (LLM-as-a-judge) inspirado en RAGAS para observabilidad continua. Finalmente, el entorno está tipado determinísticamente a través de Pydantic v2 e Instructor, permitiendo emitir respuestas complejas en tiempo real (Server-Sent Events) sin romper contratos de datos.
+The system solves production bottlenecks through: (a) *Semantic Chunking* guided by statistical deviations of cosine distance, (b) a Long-Term Memory and Semantic Cache stored in PostgreSQL (`pgvector`) under strict Row-Level Security (RLS) policies for Multi-Tenant architectures, and (c) an asynchronous passive evaluator (LLM-as-a-judge) inspired by RAGAS for continuous observability. Finally, the environment is deterministically typed using Pydantic v2 and Instructor, allowing the emission of complex responses in real-time (Server-Sent Events) without breaking data contracts.
 
 ---
 
-## 2. Introducción
+## 2. Introduction
 
-El rápido avance de los Modelos de Lenguaje (LLMs) ha trasladado el foco de la investigación de la comprensión puramente sintáctica hacia la creación de agentes autónomos capaces de razonar sobre vastas bases de conocimiento privativo. La arquitectura RAG (Retrieval-Augmented Generation) se estandarizó rápidamente como la solución predilecta para inyectar este conocimiento sin necesidad de incurrir en los prohibitivos costos del *fine-tuning* continuo. 
+The rapid advancement of Large Language Models (LLMs) has shifted the research focus from purely syntactic comprehension to the creation of autonomous agents capable of reasoning over vast proprietary knowledge bases. The RAG (Retrieval-Augmented Generation) architecture quickly became the standard solution for injecting this knowledge without incurring the prohibitive costs of continuous fine-tuning.
 
-Sin embargo, el enfoque *naïve RAG* (donde una consulta de usuario se incrusta directamente para buscar similitud cosenoidal en una base vectorial y se pasa al LLM en un único intento) presenta profundas debilidades sistémicas. En entornos de producción o tareas de ingeniería altamente técnicas, las preguntas suelen ser ambiguas o carecer de contexto explícito. Además, la fragmentación arbitraria de documentos por cantidad de caracteres (Fixed-size Chunking) frecuentemente divide el significado a la mitad de una idea, y los sistemas puramente vectoriales fracasan al intentar recuperar palabras clave o jerga muy específica que no mapea correctamente en el espacio latente del embedding.
+However, the *naïve RAG* approach (where a user query is directly embedded for cosine similarity search in a vector database and passed to the LLM in a single attempt) presents profound systemic weaknesses. In production environments or highly technical engineering tasks, queries are often ambiguous or lack explicit context. Furthermore, arbitrarily fragmenting documents by character count (Fixed-size Chunking) frequently splits meaning mid-thought, and purely vector-based systems fail when attempting to retrieve long-tail keywords or highly specific jargon that does not map correctly into the latent embedding space.
 
-Para resolver estas limitaciones, este proyecto (AI Engineer Sandbox) propone una arquitectura sistémica madura orientada a grados de producción Enterprise. Reemplazamos la ejecución secuencial tradicional por un **Ecosistema Multi-Agente** coordinado mediante la teoría de grafos (LangGraph). Este paradigma permite que un agente Supervisor analice la intención de la consulta, aplique técnicas de transformación (Multi-Query y Hypothetical Document Embeddings - HyDE) y delegue la búsqueda a rutinas especializadas. En caso de que el nodo Generador dictamine que el contexto recuperado es estadísticamente insuficiente o ambiguo, el sistema es capaz de interrumpir el flujo, modificar los parámetros de búsqueda e iterar sobre la base de datos de manera autónoma antes de emitir una respuesta final al cliente.
+To resolve these limitations, this project (AI Engineer Sandbox) proposes a mature systemic architecture geared towards Enterprise-grade production. We replace traditional sequential execution with a **Multi-Agent Ecosystem** coordinated via graph theory (LangGraph). This paradigm allows a Supervisor agent to analyze query intent, apply transformation techniques (Multi-Query and Hypothetical Document Embeddings - HyDE), and delegate search tasks to specialized routines. Should the Generator node determine that the retrieved context is statistically insufficient or ambiguous, the system is capable of halting the flow, modifying search parameters, and iterating over the database autonomously before delivering a final response to the client.
 
-A nivel de infraestructura de datos, el proyecto abandona el uso de bases de datos vectoriales aisladas (como Pinecone o Weaviate) a favor de un enfoque unificado sobre **PostgreSQL 16**. Utilizando la extensión `pgvector` y el índice jerárquico HNSW, unificamos la recuperación semántica, el *Full-Text Search* (BM25) nativo y las extracciones de conocimiento estructurado (GraphRAG) dentro de la misma transacción de la base de datos, lo que permite imponer filtros deterministas mediante *Row-Level Security* (RLS) para arquitecturas SaaS Multi-Tenant. 
+At the data infrastructure level, the project abandons isolated vector databases (such as Pinecone or Weaviate) in favor of a unified approach on **PostgreSQL 16**. By utilizing the `pgvector` extension and the hierarchical HNSW index, we unify semantic retrieval, native Full-Text Search (BM25), and structured knowledge extractions (GraphRAG) within the same database transaction. This enables the enforcement of deterministic filters via *Row-Level Security* (RLS) for Multi-Tenant SaaS architectures.
 
-Finalmente, este documento detalla cómo se orquesta la observabilidad (midiendo fidelidad y precisión en background sin penalizar la latencia del usuario) y cómo se asegura el determinismo del software mediante validaciones probabilísticas con Pydantic e Instructor. El objetivo de este paper es desglosar la implementación, justificar matemáticamente cada umbral y exponer los *trade-offs* de diseño enfrentados en la construcción de un ingeniero virtual altamente autónomo.
+Finally, this paper details how observability is orchestrated (measuring faithfulness and precision in the background without penalizing user latency) and how software determinism is ensured through probabilistic validations with Pydantic and Instructor. The goal of this paper is to break down the implementation, mathematically justify each threshold, and expose the design trade-offs faced in building a highly autonomous virtual engineer.
 
-## 3. Marco Teórico y Trabajo Relacionado
+---
 
-El diseño de nuestra arquitectura se fundamenta en recientes avances en la literatura de procesamiento de lenguaje natural (NLP) y sistemas distribuidos. En esta sección, desglosamos los pilares teóricos que sustentan las decisiones algorítmicas del *AI Engineer Sandbox*.
+## 3. Theoretical Framework and Related Work
+
+The design of our architecture is founded on recent advances in Natural Language Processing (NLP) literature and distributed systems. In this section, we break down the theoretical pillars that support the algorithmic decisions of the *AI Engineer Sandbox*.
 
 ### 3.1. Retrieval-Augmented Generation (RAG)
-Introducido formalmente por Lewis et al. (2020) [1], el paradigma RAG mitiga las alucinaciones de los Modelos de Lenguaje Grande (LLMs) condicionando la generación de texto a documentos externos recuperados dinámicamente. Tradicionalmente, un sistema RAG se compone de un *Retriever* (que busca información relevante en un corpus) y un *Generator* (que sintetiza la respuesta). Nuestro proyecto expande este concepto hacia lo que la literatura denomina "Advanced RAG" (Gao et al., 2023) [2], incorporando fases de pre-recuperación (transformación de queries vía HyDE) y post-recuperación (re-ranking).
+Formally introduced by Lewis et al. (2020) [1], the RAG paradigm mitigates LLM hallucinations by conditioning text generation on dynamically retrieved external documents. Traditionally, a RAG system consists of a *Retriever* (which searches for relevant information in a corpus) and a *Generator* (which synthesizes the answer). Our project expands this concept into what the literature terms "Advanced RAG" (Gao et al., 2023) [2], incorporating pre-retrieval phases (query transformation via HyDE) and post-retrieval phases (re-ranking).
 
-### 3.2. Sistemas Multi-Agente y Orquestación de Estados
-A diferencia de las cadenas de prompts estáticas (e.g., LangChain secuencial), los sistemas multi-agente distribuyen la carga cognitiva entre roles especializados. Inspirados en arquitecturas como AutoGen (Wu et al., 2023) [3], nuestro sistema utiliza un grafo de estado dirigido (implementado a través de LangGraph). En este paradigma, la comunicación entre agentes no es directa, sino que se da a través de un objeto de estado mutado concurrentemente (`AgentState`). La teoría de máquinas de estado finito (FSM) permite que el orquestador (Supervisor) decida dinámicamente las aristas de ejecución (transiciones) basándose en las precondiciones del estado, habilitando bucles de *Self-Correction* donde el sistema puede retroceder para buscar más información si el sub-agente Generador dictamina que el contexto es insuficiente (Shinn et al., 2023, *Reflexion*) [4].
+### 3.2. Multi-Agent Systems and State Orchestration
+Unlike static prompt chains (e.g., sequential LangChain), multi-agent systems distribute cognitive load across specialized roles. Inspired by architectures like AutoGen (Wu et al., 2023) [3], our system utilizes a directed state graph (implemented via LangGraph). In this paradigm, communication between agents is not direct; instead, it occurs through a concurrently mutated state object (`AgentState`). Finite State Machine (FSM) theory allows the orchestrator (Supervisor) to dynamically decide execution edges (transitions) based on state preconditions, enabling *Self-Correction* loops where the system can backtrack to search for more information if the Generator sub-agent deems the context insufficient (Shinn et al., 2023, *Reflexion*) [4].
 
-### 3.3. Recuperación Híbrida y Fusión de Rangos Recíprocos (RRF)
-La recuperación semántica pura mediante modelos Bi-Encoder (Dense Passage Retrieval) sufre al intentar recuperar términos de cola larga, acrónimos o nombres propios, donde la recuperación léxica (Bolsa de Palabras / BM25) es matemáticamente superior (Robertson et al., 2009) [5]. El sistema implementa Búsqueda Híbrida uniendo vectores densos y coincidencias léxicas. Para combinar estos dos espacios métricos dispares (distancia coseno continua vs. puntajes TF-IDF discretos), utilizamos **Reciprocal Rank Fusion (RRF)** (Cormack et al., 2009) [6]. RRF es un algoritmo de votación heurística que unifica las posiciones de los documentos sin necesidad de entrenar un modelo de ponderación (D-weights), calculando la similitud mediante la inversa del rango penalizado por una constante $k$.
+### 3.3. Hybrid Retrieval and Reciprocal Rank Fusion (RRF)
+Pure semantic retrieval via Bi-Encoder models (Dense Passage Retrieval) struggles to retrieve long-tail terms, acronyms, or proper nouns, where lexical retrieval (Bag of Words / BM25) is mathematically superior (Robertson et al., 2009) [5]. The system implements Hybrid Search by combining dense vectors and lexical matches. To fuse these two disparate metric spaces (continuous cosine distance vs. discrete TF-IDF scores), we use **Reciprocal Rank Fusion (RRF)** (Cormack et al., 2009) [6]. RRF is a heuristic voting algorithm that unifies document positions without the need to train a weighting model (D-weights), calculating similarity through the inverse of the rank penalized by a constant $k$.
 
-### 3.4. Re-ranking mediante Cross-Encoders
-Mientras que los Bi-Encoders computan los embeddings de la pregunta y el documento por separado, perdiendo interacciones atencionales profundas (Reimers & Gurevych, 2019) [7], los *Cross-Encoders* concatenan la pregunta y el documento alimentándolos simultáneamente a la red neuronal (e.g., BERT), permitiendo que la capa de auto-atención cruce los tokens de ambas secuencias. Debido a su alta complejidad computacional $\mathcal{O}(N)$, el sistema adopta un enfoque *Two-Stage Retrieval*, usando el Bi-Encoder rápido para obtener un conjunto top-$K$ amplio y delegando al Cross-Encoder local (FlashRank) el refinamiento final de precisión (Nogueira & Cho, 2019) [8].
+### 3.4. Re-ranking via Cross-Encoders
+While Bi-Encoders compute query and document embeddings separately, losing deep attentional interactions (Reimers & Gurevych, 2019) [7], *Cross-Encoders* concatenate the query and document, feeding them simultaneously into the neural network (e.g., BERT). This allows the self-attention layer to cross-attend tokens from both sequences. Due to its high computational complexity $\mathcal{O}(N)$, the system adopts a *Two-Stage Retrieval* approach, using the fast Bi-Encoder to obtain a broad top-$K$ set and delegating the final precision refinement to the local Cross-Encoder (FlashRank) (Nogueira & Cho, 2019) [8].
 
-### 3.5. GraphRAG y Grafos de Conocimiento
-Los sistemas RAG vectoriales fallan inherentemente al conectar entidades semánticas dispersas a través de múltiples documentos (Edge et al., 2024) [9]. La técnica **GraphRAG** resuelve esto extrayendo subgrafos de conocimiento durante la ingesta. Al modelar el corpus como una red de nodos y aristas (tripletas `Sujeto-Predicado-Objeto`), el sistema es capaz de ejecutar búsquedas topológicas y recuperar un esquema de relaciones (NetworkX) que proporciona al LLM un mapa de contexto global inalcanzable mediante pura distancia cosenoidal.
+### 3.5. GraphRAG and Knowledge Graphs
+Vector RAG systems inherently fail at connecting scattered semantic entities across multiple documents (Edge et al., 2024) [9]. The **GraphRAG** technique solves this by extracting knowledge subgraphs during ingestion. By modeling the corpus as a network of nodes and edges (`Subject-Predicate-Object` triplets), the system can execute topological searches and retrieve a relationship schema (NetworkX) that provides the LLM with a global context map unattainable through pure cosine distance.
 
 ### 3.6. Tool Use (Function Calling)
-La capacidad de los LLMs para emitir tokens estructurados que coinciden con las firmas de APIs externas (Function Calling) fue popularizada por arquitecturas como Toolformer (Schick et al., 2023) [10]. En nuestra implementación, el Supervisor actúa como un clasificador de intenciones capaz de abstraer los parámetros del usuario y ejecutar herramientas deterministas de código duro (p. ej., requests HTTP a APIs REST).
+The ability of LLMs to output structured tokens that match external API signatures (Function Calling) was popularized by architectures like Toolformer (Schick et al., 2023) [10]. In our implementation, the Supervisor acts as an intent classifier capable of abstracting user parameters and executing deterministic, hardcoded tools (e.g., HTTP REST API requests).
 
-### 3.7. Memoria a Largo Plazo y Caché Semántico
-Para dotar al sistema de persistencia cognitiva (Anti-Amnesia), se implementa un agente asíncrono que extrae perfiles y hechos del usuario. A su vez, para mitigar la latencia y los costos económicos de llamadas repetitivas (Token Economics), se utiliza un **Semantic Cache**. En lugar de requerir coincidencias exactas (Exact Match), el caché almacena los vectores de consultas anteriores indexados mediante HNSW (Hierarchical Navigable Small World, Malkov & Yashunin, 2018) [11], interceptando peticiones semánticamente idénticas en tiempo constante $\mathcal{O}(\log N)$.
+### 3.7. Long-Term Memory and Semantic Cache
+To endow the system with cognitive persistence (Anti-Amnesia), an asynchronous agent is implemented to extract user profiles and facts. In turn, to mitigate latency and economic costs of repetitive calls (Token Economics), a **Semantic Cache** is used. Rather than requiring Exact Matches, the cache stores previous query vectors indexed via HNSW (Hierarchical Navigable Small World, Malkov & Yashunin, 2018) [11], intercepting semantically identical requests in constant time $\mathcal{O}(\log N)$.
 
-### 3.8. Observabilidad Activa y Paradigma LLM-as-a-judge
-Evaluar sistemas generativos requiere métricas más complejas que BLEU o ROUGE. Frameworks como **RAGAS** (Es et al., 2023) [12] y TruLens proponen el paradigma *LLM-as-a-judge* (Zheng et al., 2023) [13], donde un LLM evaluador (juez) califica al LLM generador sin necesidad de *Ground Truth* (datos etiquetados manualmente). Nuestro sistema abstrae este marco en una rutina asíncrona que calcula *Faithfulness* (grado de alucinación), *Answer Relevance* (precisión a la pregunta) y *Context Precision* (calidad del retrieval), guardando un registro continuo para auditoría sin introducir latencia al usuario final.
+### 3.8. Active Observability and LLM-as-a-judge Paradigm
+Evaluating generative systems requires more complex metrics than BLEU or ROUGE. Frameworks like **RAGAS** (Es et al., 2023) [12] and TruLens propose the *LLM-as-a-judge* paradigm (Zheng et al., 2023) [13], where an evaluator LLM (judge) scores the generator LLM without needing Ground Truth (manually labeled data). Our system abstracts this framework into an asynchronous routine that calculates *Faithfulness* (hallucination degree), *Answer Relevance* (query precision), and *Context Precision* (retrieval quality), saving a continuous log for auditing without introducing latency to the end-user.
 
-## 4. Arquitectura del Sistema
+---
 
-El *AI Engineer Sandbox* está diseñado bajo los principios de *Clean Architecture*, separando estrictamente la capa de presentación, la lógica de enrutamiento (API), la orquestación de agentes y la persistencia de datos. El sistema abandona la ejecución síncrona monohilo y adopta una arquitectura basada en eventos asíncronos para soportar alto tráfico.
+## 4. System Architecture
 
-### 4.1. Visión General y Stack Tecnológico
-La infraestructura se fundamenta en un ecosistema Python moderno (versión 3.12+) gestionado mediante el empaquetador `uv`. 
-- **Capa Lógica (Backend):** Implementada en **FastAPI**, proporcionando enrutamiento asíncrono y WebSockets/SSE nativos.
-- **Capa de Razonamiento:** Orquestada por **LangGraph** (manejo de grafos cíclicos) y motorizada por **Anthropic Claude 3.5 Haiku**. Se eligió *Haiku* por su latencia ultrabaja (ideal para el nodo Supervisor) y su bajo costo por token (Token Economics), garantizando fluidez en el ruteo sin sacrificar capacidad analítica.
-- **Capa de Persistencia:** **PostgreSQL 16** con la extensión **pgvector**. Centraliza los vectores semánticos, el motor de búsqueda léxica (BM25), el caché semántico, los esquemas relacionales de memoria y el almacén del grafo de conocimiento, eludiendo la necesidad de mantener microservicios de bases de datos aislados.
-- **Capa de Presentación:** **Streamlit**, operando como un cliente disociado que consume eventos del servidor en tiempo real.
+The *AI Engineer Sandbox* is designed under *Clean Architecture* principles, strictly separating the presentation layer, routing logic (API), agent orchestration, and data persistence. The system abandons synchronous, single-threaded execution and adopts an asynchronous event-driven architecture to support high traffic.
 
-### 4.2. Topología del Grafo y Estado Compartido
-El flujo de razonamiento no es un *pipeline* secuencial, sino una Máquina de Estados Finita (FSM) dirigida. Los componentes (Nodos) no se pasan variables directamente; en su lugar, mutan un estado global compartido (`AgentState`). 
+### 4.1. Overview and Tech Stack
+The infrastructure is founded on a modern Python ecosystem (version 3.12+) managed via the `uv` packager.
+- **Logic Layer (Backend):** Implemented in **FastAPI**, providing asynchronous routing and native WebSockets/SSE.
+- **Reasoning Layer:** Orchestrated by **LangGraph** (handling cyclic graphs) and powered by **Anthropic Claude 3.5 Haiku**. *Haiku* was chosen for its ultra-low latency (ideal for the Supervisor node) and its low cost per token (Token Economics), ensuring fluid routing without sacrificing analytical capability.
+- **Persistence Layer:** **PostgreSQL 16** with the **pgvector** extension. It centralizes semantic vectors, the lexical search engine (BM25), semantic cache, relational memory schemas, and the knowledge graph store, bypassing the need to maintain isolated database microservices.
+- **Presentation Layer:** **Streamlit**, operating as a decoupled client that consumes server events in real-time.
+
+### 4.2. Graph Topology and Shared State
+The reasoning flow is not a sequential pipeline, but a Directed Finite State Machine (FSM). Components (Nodes) do not pass variables directly to each other; instead, they mutate a globally shared state (`AgentState`).
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Supervisor : Query del Usuario (AgentState)
+    [*] --> Supervisor : User Query (AgentState)
     
-    Supervisor --> Salida_Directa : Intent == casual/out_of_scope/tool
-    Supervisor --> Investigador : Intent == knowledge_search
+    Supervisor --> Direct_Output : Intent == casual/out_of_scope/tool
+    Supervisor --> Researcher : Intent == knowledge_search
     
-    Investigador --> Generador : vector_docs + graph_docs
+    Researcher --> Generator : vector_docs + graph_docs
     
-    state Generador {
+    state Generator {
         [*] --> Extractor_LLM
-        Extractor_LLM --> Validacion_Revisora : Pydantic
+        Extractor_LLM --> Reviewer_Validation : Pydantic
     }
     
-    Generador --> Investigador : needs_more_info == True & iter < 2
-    Generador --> [*] : needs_more_info == False | iter >= 2
+    Generator --> Researcher : needs_more_info == True & iter < 2
+    Generator --> [*] : needs_more_info == False | iter >= 2
     
-    Salida_Directa --> [*]
+    Direct_Output --> [*]
     
     note right of [*]
-        Background Tasks (Asíncronas):
+        Background Tasks (Asynchronous):
         1. RAG Evaluator (LLM-as-a-judge)
-        2. Extracción de LTM (Memoria)
-        3. Indexación en Caché Semántico
+        2. LTM Extraction (Memory)
+        3. Semantic Cache Indexing
     end note
 ```
 
-El `AgentState` está implementado como un `TypedDict` en Python que transita por todos los nodos, transportando propiedades mutables como la consulta original, el tenant ID del usuario, el historial, variaciones de búsqueda, documentos recuperados, un flag de completitud (`needs_more_info`), y un contador de iteraciones (`iterations`) para evitar bucles infinitos.
+The `AgentState` is implemented as a `TypedDict` in Python that traverses all nodes, carrying mutable properties such as the original query, user tenant ID, history, search variations, retrieved documents, a completeness flag (`needs_more_info`), and an iterations counter (`iterations`) to prevent infinite loops.
 
-### 4.3. Nodos del Grafo y Ecosistema de Agentes
+### 4.3. Graph Nodes and Agent Ecosystem
 
-El sistema distingue arquitectónicamente entre *Nodos* (funciones que ejecutan lógica determinista dentro del grafo) y *Agentes* (llamadas no deterministas al LLM con un prompt sistémico).
+The system architecturally distinguishes between *Nodes* (functions executing deterministic logic within the graph) and *Agents* (non-deterministic LLM calls with a system prompt).
 
-#### 4.3.1. Nodo Supervisor (`supervisor_node`)
-- **Rol:** Actúa como *router* semántico, clasificador de intenciones e inyector de herramientas. Define si la petición debe resolverse localmente o ir a la base de datos.
-- **Agente LLM que invoca:** `analyze_query` (`src/services/router.py`).
-- **Entradas:** `query` original y `history`.
-- **Salidas:** Modifica el `AgentState` inyectando `intent_type` y `search_queries`.
-- **Prompt Sistémico:** *"Eres el 'Router' de un AI Engineer Sandbox... Determina la intención (casual_greeting, knowledge_search, tool_execution, out_of_scope)... Genera 3 variaciones de la pregunta optimizadas para búsqueda vectorial (Multi-Query)... Redacta un hypothetical_document (HyDE)..."*
-- **Herramientas asignadas (Tool Use):** `get_current_time`, `get_crypto_price`, `get_github_profile`. Si detecta un *intent* de herramienta, el propio Nodo detiene el flujo, invoca la función Python (`src/services/tools.py`) e inserta el resultado directo en el estado.
+#### 4.3.1. Supervisor Node (`supervisor_node`)
+- **Role:** Acts as a semantic router, intent classifier, and tool injector. Defines whether the request should be resolved locally or hit the database.
+- **Invoked LLM Agent:** `analyze_query` (`src/services/router.py`).
+- **Inputs:** Original `query` and `history`.
+- **Outputs:** Mutates the `AgentState` by injecting `intent_type` and `search_queries`.
+- **System Prompt:** *"You are the 'Router' of an AI Engineer Sandbox... Determine the intent (casual_greeting, knowledge_search, tool_execution, out_of_scope)... Generate 3 query variations optimized for vector search (Multi-Query)... Write a hypothetical_document (HyDE)..."*
+- **Assigned Tools (Tool Use):** `get_current_time`, `get_crypto_price`, `get_github_profile`. If a tool intent is detected, the Node halts the flow, invokes the Python function (`src/services/tools.py`), and inserts the direct result into the state.
 
-#### 4.3.2. Nodo Investigador (`researcher_node`)
-- **Rol:** Es un nodo **estrictamente pragmático**. No consume tokens de LLM. Actúa como el motor I/O asíncrono para interactuar con la base de datos.
-- **Agente LLM que invoca:** Ninguno.
-- **Lógica de Ejecución:** Recibe las consultas (Query Original, Variaciones Multi-Query, Documento HyDE) y dispara consultas SQL concurrentes usando `asyncio.gather`. Deduplica los resultados mediante Hashing Sets de Python, pasa la lista limpia por el Re-ranker local (FlashRank) y adjunta el sub-grafo de GraphRAG. En cada reintento amplía la ventana de recuperación (`retrieval_window`): multiplica los candidatos por variante y deja pasar un 50 % más de documentos tras el re-ranking, con los máximos de la API como techo. Marca `retrieval_exhausted` cuando ampliarla no podría aportar nada nuevo. Finalmente, incrementa `iterations += 1`.
+#### 4.3.2. Researcher Node (`researcher_node`)
+- **Role:** Strictly a **pragmatic node**. It consumes no LLM tokens. Acts as the asynchronous I/O engine interacting with the database.
+- **Invoked LLM Agent:** None.
+- **Execution Logic:** Receives queries (Original Query, Multi-Query Variations, HyDE Document) and fires concurrent SQL queries using `asyncio.gather`. Deduplicates results using Python Hashing Sets, passes the clean list through the local Re-ranker (FlashRank), and attaches the GraphRAG sub-graph. On each retry it widens the retrieval window (`retrieval_window`): it multiplies the candidates per variant and lets 50% more documents through the re-ranking, capped at the API maximums. It sets `retrieval_exhausted` when widening could not bring anything new. Finally, increments `iterations += 1`.
 
-#### 4.3.3. Nodo Generador (`generator_node`)
-- **Rol:** Sintetizador final y Revisor lógico. Compila la respuesta final para el usuario y evalúa si cuenta con suficiente contexto para responder sin alucinar.
-- **Agente LLM que invoca:** `generate_answer` (`src/services/extractor.py`).
-- **Prompt Sistémico:** *"Eres un experto respondiendo preguntas basado estrictamente en el contexto recuperado... Usa [Doc X] para citar. Contexto sobre el usuario: {user_profile}..."*
-- **Condición de Terminación / Ruteo:** El modelo produce la estructura Pydantic `StructuredAnswer`, la cual contiene un flag booleano `requires_more_info`. El nodo mapea este flag al estado como `needs_more_info`. La función interceptora de aristas (`route_reviewer`) lee este valor; si es `True`, las `iterations` son menores a 2 y la búsqueda aún puede ampliarse (`retrieval_exhausted` es `False`), el flujo *retorna* al Investigador (Self-Correction); de lo contrario, transita a `END`.
+#### 4.3.3. Generator Node (`generator_node`)
+- **Role:** Final synthesizer and logical Reviewer. Compiles the final response for the user and evaluates if it has enough context to answer without hallucinating.
+- **Invoked LLM Agent:** `generate_answer` (`src/services/extractor.py`).
+- **System Prompt:** *"You are an expert answering questions strictly based on the retrieved context... Use [Doc X] to cite. User context: {user_profile}..."*
+- **Termination / Routing Condition:** The model outputs the `StructuredAnswer` Pydantic structure, which contains a boolean flag `requires_more_info`. The node maps this flag to the state as `needs_more_info`. The edge interceptor function (`route_reviewer`) reads this value; if `True`, `iterations` is less than 2, and the search can still be widened (`retrieval_exhausted` is `False`), the flow *returns* to the Researcher (Self-Correction); otherwise, it transitions to `END`.
 
-#### 4.3.4. Agentes Asíncronos (Background Tasks)
-Para evitar bloquear el *event loop* de FastAPI (y por ende, penalizar la latencia percibida por el usuario final), el sistema delega cargas pesadas a tareas asíncronas de "disparar y olvidar" (Fire-and-forget).
-1. **Agente Evaluador (`evaluate_rag_response`):** Un LLM-as-a-judge invocado con el prompt: *"Eres un juez imparcial evaluando un sistema RAG. Tu trabajo es evaluar 3 métricas de 0.0 a 1.0 (Faithfulness, Answer Relevance, Context Precision)..."*.
-2. **Agente de Memoria (`extract_and_save_facts`):** Invoca a un LLM en background con el prompt: *"Eres un asistente que extrae hechos útiles o preferencias del usuario... Escríbelos en tercera persona, oraciones cortas."*. Los resultados se vectorizan y se guardan para inyectarse permanentemente en futuras respuestas a través del campo `{user_profile}` del Generador.
-3. **Agente de Extracción GraphRAG (`extract_knowledge_graph`):** Opera exclusivamente durante la ruta de ingesta de documentos (`/ingest/`), utilizando el prompt *"Eres un experto en GraphRAG. Extrae un grafo de conocimiento... Devuelve tripletas (NODO ORIGEN, RELACIÓN, NODO DESTINO)."*.
+#### 4.3.4. Asynchronous Agents (Background Tasks)
+To avoid blocking the FastAPI event loop (and thus penalizing the latency perceived by the end user), the system delegates heavy workloads to asynchronous "fire-and-forget" tasks.
+1. **Evaluator Agent (`evaluate_rag_response`):** An LLM-as-a-judge invoked with the prompt: *"You are an impartial judge evaluating a RAG system. Your job is to evaluate 3 metrics from 0.0 to 1.0 (Faithfulness, Answer Relevance, Context Precision)..."*.
+2. **Memory Agent (`extract_and_save_facts`):** Invokes a background LLM with the prompt: *"You are an assistant that extracts useful facts or user preferences... Write them in third person, short sentences."*. The results are vectorized and saved to be permanently injected into future responses via the Generator's `{user_profile}` field.
+3. **GraphRAG Extraction Agent (`extract_knowledge_graph`):** Operates exclusively during the document ingestion route (`/ingest/`), using the prompt *"You are a GraphRAG expert. Extract a knowledge graph... Return triplets (SOURCE NODE, RELATION, TARGET NODE)."*.
 
-### 4.4. Capa de Presentación y Aislamiento Multi-Tenant
-La comunicación entre la UI de Streamlit y FastAPI utiliza el protocolo **Server-Sent Events (SSE)**. Esto permite generar un flujo de datos (streaming) token a token, produciendo retroalimentación instantánea en la interfaz, mitigando el problema del *Time-To-First-Token* (TTFT) en respuestas masivas.
+### 4.4. Presentation Layer and Multi-Tenant Isolation
+Communication between the Streamlit UI and FastAPI utilizes the **Server-Sent Events (SSE)** protocol. This allows generating a data stream token by token, producing instant feedback on the interface, mitigating the Time-To-First-Token (TTFT) issue in massive responses.
 
-Para escalar el sistema a nivel Enterprise (SaaS), la base de datos no es compartida globalmente. Se utiliza autenticación **JWT** inyectada en los cabezales HTTP HTTP Bearer. A nivel de base de datos, en lugar de filtrar con sentencias `WHERE tenant_id = X` (lo cual es susceptible a errores humanos o Inyecciones SQL), se habilitan políticas estrictas de **Row-Level Security (RLS)** en PostgreSQL. Al abrir el pool de conexiones, el backend inyecta `SET app.current_tenant = X`, obligando a la base de datos a invisibilizar físicamente cualquier fila de documentos, memoria o historial que no pertenezca a la sesión autenticada.
+To scale the system to Enterprise SaaS level, the database is not globally shared. **JWT** authentication injected into HTTP Bearer headers is utilized. At the database level, instead of filtering with `WHERE tenant_id = X` statements (which are susceptible to human error or SQL Injection), strict **Row-Level Security (RLS)** policies are enabled in PostgreSQL. Upon opening the connection pool, the backend injects `SET app.current_tenant = X`, forcing the database to physically hide any document, memory, or history row that does not belong to the authenticated session.
 
-## 5. Formalización Matemática
 
-En esta sección se definen rigurosamente los modelos matemáticos, algoritmos numéricos y parámetros empíricos que gobiernan el comportamiento determinista del sistema.
+---
 
-### 5.1. Búsqueda Híbrida y Reciprocal Rank Fusion (RRF)
-El sistema (*retriever*) aborda el problema de la recuperación combinando dos espacios métricos dispares: la similitud continua densa y la puntuación de relevancia léxica discreta. 
+## 5. Mathematical Formalization
 
-Sea $D = \{d_1, d_2, \dots, d_N\}$ el corpus de documentos particionados en la base de datos.
-Dada una consulta $q$, definimos dos funciones de *ranking*:
-1. **Ranking Vectorial ($R_v$):** Ordena los documentos ascendentemente según la distancia coseno entre el vector de la consulta $\mathbf{v}_q \in \mathbb{R}^{384}$ y el embedding del documento $\mathbf{v}_d \in \mathbb{R}^{384}$.
-2. **Ranking Léxico ($R_f$):** Ordena los documentos descendentemente utilizando la métrica `ts_rank` nativa de PostgreSQL (implementación de similitud semántica basada en BM25 / ponderación Term Frequency-Inverse Document Frequency).
+This section rigorously defines the mathematical models, numerical algorithms, and empirical parameters that govern the deterministic behavior of the system.
 
-Para fusionar ambas clasificaciones en un puntaje unificado $S_{RRF}(d)$, se utiliza la fórmula de Fusión de Rango Recíproco (implementada en `src/services/retriever.py`, líneas 33-34):
+### 5.1. Hybrid Search and Reciprocal Rank Fusion (RRF)
+The *retriever* system addresses the retrieval problem by combining two disparate metric spaces: continuous dense similarity and discrete lexical relevance scoring.
+
+Let $D = \{d_1, d_2, \dots, d_N\}$ be the corpus of partitioned documents in the database.
+Given a query $q$, we define two ranking functions:
+1. **Vector Ranking ($R_v$):** Orders documents ascendingly according to the cosine distance between the query vector $\mathbf{v}_q \in \mathbb{R}^{384}$ and the document embedding $\mathbf{v}_d \in \mathbb{R}^{384}$.
+2. **Lexical Ranking ($R_f$):** Orders documents descendingly using the native `ts_rank` PostgreSQL metric (an implementation of BM25 / Term Frequency-Inverse Document Frequency weighting).
+
+To fuse both classifications into a unified score $S_{RRF}(d)$, the Reciprocal Rank Fusion formula is used (implemented in `src/services/retriever.py`, lines 33-34):
 
 $$ S_{RRF}(d) = \frac{1}{k + R_v(d)} + \frac{1}{k + R_f(d)} $$
 
-Donde:
-- $R_v(d)$ y $R_f(d)$ representan el rango posicional (1, 2, 3...) del documento $d$ en sus respectivas listas. Si un documento no aparece en una lista, su término en la suma colapsa a $0$.
-- $k \in \mathbb{Z}^+$ es una constante empírica de suavizado. El sistema utiliza el estándar de la industria $k = 60$ para evitar que posiciones extremadamente altas en un único método dominen desproporcionadamente la puntuación combinada.
+Where:
+- $R_v(d)$ and $R_f(d)$ represent the positional rank (1, 2, 3...) of document $d$ in their respective lists. If a document does not appear in a list, its term in the sum collapses to $0$.
+- $k \in \mathbb{Z}^+$ is an empirical smoothing constant. The system uses the industry standard $k = 60$ to prevent extremely high positions in a single method from disproportionately dominating the combined score.
 
-En tiempo de inferencia, se filtran las listas individuales con $top\_k = 15$ antes de la fusión.
+At inference time, individual lists are filtered with $top\_k = 15$ before fusion.
 
-### 5.2. Segmentación Textual (Semantic Chunking) vía Análisis Estadístico
-Para particionar documentos durante la ingesta, se abandona la partición de tamaño fijo en favor del cálculo de límites de transición semántica. Dado un documento desglosado secuencialmente en oraciones $S = \{s_1, s_2, \dots, s_M\}$, se proyectan en el espacio latente como $\mathbf{e}_i \in \mathbb{R}^{384}$.
+### 5.2. Text Segmentation (Semantic Chunking) via Statistical Analysis
+To partition documents during ingestion, fixed-size chunking is abandoned in favor of calculating semantic transition boundaries. Given a document broken down sequentially into sentences $S = \{s_1, s_2, \dots, s_M\}$, they are projected into the latent space as $\mathbf{e}_i \in \mathbb{R}^{384}$.
 
-Se computa la similitud de coseno discreta entre oraciones adyacentes (`src/services/ingestion.py`, líneas 18-20):
+The discrete cosine similarity between adjacent sentences is computed (`src/services/ingestion.py`, lines 18-20):
 
 $$ \text{Dist}(\mathbf{e}_i, \mathbf{e}_{i+1}) = 1 - \frac{\mathbf{e}_i \cdot \mathbf{e}_{i+1}}{\|\mathbf{e}_i\| \|\mathbf{e}_{i+1}\|} $$
 
-Para determinar dinámicamente si dos oraciones pertenecen al mismo contexto, se calcula el umbral de ruptura $\tau$ utilizando la estadística poblacional de las distancias del documento completo (Línea 23):
+To dynamically determine if two sentences belong to the same context, the breaking threshold $\tau$ is calculated using the population statistics of the entire document's distances (Line 23):
 
 $$ \tau = \mu_{\text{Dist}} + c \cdot \sigma_{\text{Dist}} $$
 
-Donde $\mu_{\text{Dist}}$ es la media muestral, $\sigma_{\text{Dist}}$ es la desviación estándar, y $c$ es un multiplicador empírico fijado en $1.25$. Una nueva partición (Chunk) se genera sí, y solo sí, $\text{Dist}(\mathbf{e}_{i-1}, \mathbf{e}_i) > \tau$, o si la acumulación de tokens del chunk actual supera el límite superior estricto $L_{max} = 500$ tokens (Línea 26).
+Where $\mu_{\text{Dist}}$ is the sample mean, $\sigma_{\text{Dist}}$ is the standard deviation, and $c$ is an empirical multiplier fixed at $1.25$. A new partition (Chunk) is generated if, and only if, $\text{Dist}(\mathbf{e}_{i-1}, \mathbf{e}_i) > \tau$, or if the accumulated token count of the current chunk exceeds the strict upper limit $L_{max} = 500$ tokens (Line 26).
 
-### 5.3. Espacios Vectoriales, Caché Semántico e Índices HNSW
-Tanto para la base de datos principal, como para la tabla de **Semantic Cache**, se emplea la extensión `pgvector` en PostgreSQL (`sql/01_init.sql`).
-Las métricas en $\mathbb{R}^{384}$ son optimizadas mediante el índice de grafos *Hierarchical Navigable Small World* (HNSW). Dado que los vectores provienen del modelo `all-MiniLM-L6-v2` el cual arroja vectores ya normalizados ($\|v\| = 1$), el operador de indexación `vector_cosine_ops` se degrada eficientemente a una simple resta de producto escalar. 
+### 5.3. Vector Spaces, Semantic Cache, and HNSW Indices
+For both the main database and the **Semantic Cache** table, the `pgvector` extension in PostgreSQL is employed (`sql/01_init.sql`).
+Metrics in $\mathbb{R}^{384}$ are optimized using the *Hierarchical Navigable Small World* (HNSW) graph index. Since the vectors originate from the `all-MiniLM-L6-v2` model which yields already normalized vectors ($\|v\| = 1$), the `vector_cosine_ops` index operator efficiently degrades to a simple dot product subtraction.
 
-El índice HNSW hereda los parámetros por defecto de pgvector:
-- $m = 16$: Número máximo de conexiones bidireccionales en las capas inferiores del grafo.
-- $ef\_construction = 64$: Tamaño de la lista de candidatos dinámica en tiempo de inserción.
+The HNSW index inherits pgvector's default parameters:
+- $m = 16$: Maximum number of bi-directional links created for every new element during insertion.
+- $ef\_construction = 64$: Size of the dynamic candidate list during insertion.
 
-Para la intercepción (Caché Hit), el sistema (`src/services/cache.py`) evalúa si existe una consulta previa $\mathbf{v}_{prev}$ cuya similitud respecto a la consulta actual $\mathbf{v}_{curr}$ cumpla:
+For interception (Cache Hit), the system (`src/services/cache.py`) evaluates if there is a previous query $\mathbf{v}_{prev}$ whose similarity to the current query $\mathbf{v}_{curr}$ satisfies:
 
 $$ (1 - \text{Dist}_{\text{cos}}(\mathbf{v}_{prev}, \mathbf{v}_{curr})) \geq 0.85 $$
 
-### 5.4. Formalización del StateGraph (Máquina de Estados)
-La orquestación se abstrae como una Máquina de Estados Finitos Dirigida $\mathcal{M} = \langle \Sigma, S, s_0, \delta, F \rangle$ (`src/services/agent_graph/graph.py`), donde:
-- **Estados ($S$):** $\{Sup, Res, Gen, End\}$ correspondientes a los nodos Supervisor, Investigador, Generador y el estado terminal de salida.
-- **Estado Inicial ($s_0$):** $Sup$.
-- **Alfabeto de Transición ($\Sigma$):** Banderas inyectadas en el objeto mutado de memoria (e.g., $intent\_type$, $requires\_more\_info$, $iterations$).
-- **Estados de Aceptación ($F$):** $\{End\}$.
+### 5.4. StateGraph Formalization (Finite State Machine)
+Orchestration is abstracted as a Directed Finite State Machine $\mathcal{M} = \langle \Sigma, S, s_0, \delta, F \rangle$ (`src/services/agent_graph/graph.py`), where:
+- **States ($S$):** $\{Sup, Res, Gen, End\}$ corresponding to the Supervisor, Researcher, Generator nodes, and the terminal output state.
+- **Initial State ($s_0$):** $Sup$.
+- **Transition Alphabet ($\Sigma$):** Flags injected into the mutated memory object (e.g., $intent\_type$, $requires\_more\_info$, $iterations$).
+- **Accepting States ($F$):** $\{End\}$.
 
-La función de transición condicional $\delta(s, \sigma) \to s'$ en el ruteador de revisión ($Gen \to ?$ en la Línea 10) está definida rígidamente por:
+The conditional transition function $\delta(s, \sigma) \to s'$ in the review router ($Gen \to ?$ at Line 10) is rigidly defined by:
 $$ 
 \delta(Gen) = \begin{cases} 
-Res, & \text{si } requires\_more\_info = \text{True } \land \text{ } iter < 2 \\ 
-End, & \text{en otro caso} 
+Res, & \text{if } requires\_more\_info = \text{True } \land \text{ } iter < 2 \\ 
+End, & \text{otherwise} 
 \end{cases} 
 $$
-Esto asegura una Complejidad de Bucle Estricta de $\mathcal{O}(2)$, previniendo infinitos ciclos de *Self-Correction* e impactando la previsibilidad asintótica del costo computacional y de inferencia LLM.
+This ensures a Strict Loop Complexity of $\mathcal{O}(2)$, preventing infinite *Self-Correction* cycles and impacting the asymptotic predictability of computational and LLM inference costs.
 
-### 5.5. Fusión Multi-Query, Deduplicación y Complejidad
-En el flujo *Agentic*, el nodo Investigador (`src/services/agent_graph/nodes.py`) recibe un conjunto $Q = \{q_{orig}, q_{var1}, q_{var2}, q_{var3}, q_{hyde}\}$. La función dispara procesos concurrentes asíncronos para cada consulta, colapsando los resultados en un subconjunto $C_{multi}$. 
-La deduplicación final $C_{unique}$ se alcanza mediante una evaluación de pertenencia sobre funciones Hash unívocas de Python:
+### 5.5. Multi-Query Fusion, Deduplication, and Complexity
+In the *Agentic* flow, the Researcher node (`src/services/agent_graph/nodes.py`) receives a set $Q = \{q_{orig}, q_{var1}, q_{var2}, q_{var3}, q_{hyde}\}$. The function triggers asynchronous concurrent processes for each query, collapsing the results into a subset $C_{multi}$. 
+Final deduplication $C_{unique}$ is achieved through membership evaluation on unequivocal Python Hash sets:
 $$ C_{unique} = \bigcup_{i=1}^{|Q|} \{ d \in \text{Retrieve}(q_i) \mid Hash(d.content) \notin \text{SeenSet} \} $$
-La complejidad temporal total de esta recuperación distribuida se reduce a $\mathcal{O}(\max_{q_i} T_{retrieval}(q_i))$ gracias al despacho paralelo de corrutinas (`asyncio.gather`), acotado por la latencia del pool de conexiones `asyncpg`. 
+The total time complexity of this distributed retrieval is reduced to $\mathcal{O}(\max_{q_i} T_{retrieval}(q_i))$ thanks to parallel coroutine dispatch (`asyncio.gather`), bounded by the latency of the `asyncpg` connection pool.
 
-A este conjunto se le antepone (`.insert(0)`) el string de conocimiento de GraphRAG. El motor ingenuo de **GraphRAG** (`src/services/graphrag.py`) extrae semillas difusas buscando raíces Regex estáticas `\w+` ($len>3$) y realiza una interpolación relacional plana de $1$-hop ($limit = 10$).
+The GraphRAG knowledge string is prepended (`.insert(0)`) to this set. The naive **GraphRAG** engine (`src/services/graphrag.py`) extracts fuzzy seeds looking for static Regex roots `\w+` ($len>3$) and performs a flat 1-hop relational interpolation ($limit = 10$).
 
-### 5.6. Definición Formal de las Métricas del Evaluador (LLM-as-a-judge)
-El sistema implementa evaluación pasiva probabilística mapeada en un dominio continuo (restricciones `CHECK` de la tabla `rag_evaluations` en `sql/01_init.sql`) mediante la función evaluadora (`src/services/evaluator.py`). 
-El LLM juzga la traza asignando puntuaciones normalizadas:
+### 5.6. Formal Definition of Evaluator Metrics (LLM-as-a-judge)
+The system implements continuous probabilistic passive evaluation mapped into a continuous domain (`CHECK` constraints on the `rag_evaluations` table in `sql/01_init.sql`) via the evaluating function (`src/services/evaluator.py`). 
+The LLM judges the trace by assigning normalized scores:
 - $Score \in [0.0, 1.0]$.
-Donde el modelo matemático se descompone en las tres métricas nucleares de Ragas:
-1. **Faithfulness ($f$):** Relación de hechos generados en la respuesta frente a los que pueden derivarse estrictamente del contexto aportado.
-2. **Answer Relevance ($r$):** Discrepancia cosenoidal o deducción semántica entre la respuesta final generada y la pregunta subyacente real.
-3. **Context Precision ($p$):** Relación señal/ruido que evalúa si los fragmentos extraídos aportaron verdadero conocimiento útil en lugar de texto de relleno de los trozos contiguos.
-Las restricciones Pydantic `ge=0.0` y `le=1.0` rechazan forzosamente cualquier respuesta del LLM fuera del soporte probabilístico, arrojando una `ValidationError` que garantiza la estabilidad del sistema métrico de auditoría.
+Where the mathematical model breaks down into the three core Ragas metrics:
+1. **Faithfulness ($f$):** Ratio of generated facts in the response versus those strictly derivable from the provided context.
+2. **Answer Relevance ($r$):** Cosine discrepancy or semantic deduction between the final generated response and the actual underlying question.
+3. **Context Precision ($p$):** Signal-to-noise ratio evaluating whether the extracted fragments provided true useful knowledge rather than filler text from adjacent chunks.
+The Pydantic constraints `ge=0.0` and `le=1.0` forcefully reject any LLM response outside the probabilistic support, throwing a `ValidationError` that guarantees the stability of the auditing metric system.
 
-## 6. Diseño e Implementación
+---
 
-Para trasladar los fundamentos teóricos y las formulaciones abstractas a un sistema en producción altamente concurrente, el *AI Engineer Sandbox* fue diseñado prestando extrema atención a la gestión de memoria, control de errores y modularidad del código.
+## 6. Design and Implementation
 
-### 6.1. Estructura del Repositorio y Separación de Responsabilidades
-El proyecto respeta la topología de la *Arquitectura Limpia (Clean Architecture)*.
-- **Configuraciones:** `pyproject.toml` (manejo de dependencias vía `uv`), `.env` y el archivo de despliegue de persistencia `docker-compose.yml`.
-- **`sql/`**: Mantiene los scripts de inicialización DDL (`00_create_app_user.sql`, `01_init.sql`) y, en `sql/migrations/`, las migraciones iterativas para HNSW y Row-Level Security (`apply_rls.sql`, `apply_cache.sql`, etc.).
-- **`src/api/`**: La capa de presentación REST. `main.py` levanta el servidor asíncrono de FastAPI y configura middlewares de CORS. `auth.py` contiene la lógica de decodificación JWT. La carpeta `routers/` expone los puertos de entrada HTTP (`chat.py` y `ingest.py`), separando completamente las URLs de la lógica de negocio subyacente.
-- **`src/models/`**: Define los contratos de la aplicación utilizando la validación de Pydantic v2 (por ejemplo, `structured.py`, `search.py` y `requests.py`). 
-- **`src/services/`**: Alberga las entrañas algorítmicas del RAG. `ingestion.py`, `retriever.py`, `reranker.py`, `extractor.py`, `cache.py`, `graphrag.py` y `evaluator.py`. Las herramientas de Function Calling residen en `tools.py`.
-- **`src/services/agent_graph/`**: El ecosistema Multi-Agente con `graph.py` ensamblando el StateGraph, `nodes.py` implementando los actuadores, y `state.py` definiendo el grafo en memoria.
-- **`src/frontend/app.py`**: El cliente Streamlit para prototipado visual en tiempo real.
+To translate theoretical foundations and abstract formulations into a highly concurrent production system, the *AI Engineer Sandbox* was designed with extreme attention to memory management, error handling, and code modularity.
 
-### 6.2. Concurrencia y Persistencia (asyncpg y Row-Level Security)
-FastAPI está construido sobre el *Event Loop* de Python. Para asegurar que la base de datos no bloquee el hilo principal (Thread-Blocking), el sistema no utiliza el ORM clásico (SQLAlchemy síncrono), sino que emplea `asyncpg` para abrir agrupaciones de conexiones asíncronas puras, cruciales durante la ejecución simultánea del Multi-Query en el nodo investigador.
+### 6.1. Repository Structure and Separation of Concerns
+The project respects the topology of *Clean Architecture*.
+- **Configurations:** `pyproject.toml` (dependency management via `uv`), `.env`, and the persistence deployment file `docker-compose.yml`.
+- **`sql/`**: Maintains DDL initialization scripts (`00_create_app_user.sql`, `01_init.sql`) and, under `sql/migrations/`, iterative migrations for HNSW and Row-Level Security (`apply_rls.sql`, `apply_cache.sql`, etc.).
+- **`src/api/`**: The REST presentation layer. `main.py` boots the asynchronous FastAPI server and configures CORS middlewares. `auth.py` contains JWT decoding logic. The `routers/` folder exposes HTTP entry ports (`chat.py` and `ingest.py`), completely separating URLs from underlying business logic.
+- **`src/models/`**: Defines application contracts using Pydantic v2 validation (e.g., `structured.py`, `search.py`, and `requests.py`). 
+- **`src/services/`**: Houses the algorithmic guts of the RAG. `ingestion.py`, `retriever.py`, `reranker.py`, `extractor.py`, `cache.py`, `graphrag.py`, and `evaluator.py`. Function Calling tools reside in `tools.py`.
+- **`src/services/agent_graph/`**: The Multi-Agent ecosystem with `graph.py` assembling the StateGraph, `nodes.py` implementing the actuators, and `state.py` defining the in-memory graph.
+- **`src/frontend/app.py`**: The Streamlit client for visual real-time prototyping.
 
-La seguridad Multi-Tenant es delegada enteramente al motor de PostgreSQL mediante **Row-Level Security (RLS)**. Cuando se decodifica un JWT válido (`src/api/auth.py`), se intercepta el pool asíncrono y se inyecta en la cabecera transaccional (`SET app.current_tenant = X`). Por ejemplo, en `src/services/retriever.py`, incluso con un atacante logrando *Prompt Injection* para extraer información ajena, la base de datos truncaría nativamente cualquier resultado del vector que no coincida con el contexto RLS actual de la conexión.
+### 6.2. Concurrency and Persistence (asyncpg and Row-Level Security)
+FastAPI is built on Python's *Event Loop*. To ensure the database does not cause Thread-Blocking on the main thread, the system does not use classic ORMs (synchronous SQLAlchemy) but rather employs `asyncpg` to open pure asynchronous connection pools, crucial during simultaneous execution of Multi-Query in the researcher node.
 
-### 6.3. Gestión de Tokens y Contratos Estrictos (Instructor + Pydantic v2)
-Obligar a un modelo LLM masivo a retornar objetos JSON válidos y manejables tradicionalmente requiere complejos esquemas de reintento heurístico. El sistema elude este problema utilizando **Instructor**, un parche idiomático alrededor de las llamadas de Anthropic que asegura el tipado estricto a través de `Pydantic v2`.
+Multi-Tenant security is entirely delegated to the PostgreSQL engine via **Row-Level Security (RLS)**. When a valid JWT is decoded (`src/api/auth.py`), the asynchronous pool is intercepted and injected into the transactional header (`SET app.current_tenant = X`). For example, in `src/services/retriever.py`, even if an attacker achieved *Prompt Injection* to extract foreign information, the database would natively truncate any vector result that does not match the current RLS context of the connection.
 
-Fragmento crítico en `src/services/router.py`:
+### 6.3. Token Management and Strict Contracts (Instructor + Pydantic v2)
+Forcing a massive LLM to return valid and manageable JSON objects traditionally requires complex heuristic retry schemas. The system sidesteps this problem by using **Instructor**, an idiomatic patch around Anthropic calls that ensures strict typing via `Pydantic v2`.
+
+Critical fragment in `src/services/router.py`:
 ```python
 class QueryIntent(BaseModel):
-    intent_type: str = Field(description="Debe ser 'casual_greeting', 'knowledge_search'...")
-    search_queries: list[str] = Field(description="Genera 3 variaciones de búsqueda")
-    hypothetical_document: str = Field(description="Párrafo hipotético (HyDE)")
+    intent_type: str = Field(description="Must be 'casual_greeting', 'knowledge_search'...")
+    search_queries: list[str] = Field(description="Generates 3 search variations")
+    hypothetical_document: str = Field(description="Hypothetical paragraph (HyDE)")
     tool_name: str = Field(default="")
 
 response = await client.messages.create(
@@ -245,165 +254,174 @@ response = await client.messages.create(
     response_model=QueryIntent,
 )
 ```
-Instructor inyecta un *schema parser* estricto y obliga al LLM a instanciar la clase `QueryIntent`. Esto erradica totalmente las fallas de análisis estructural y los temidos *KeyErrors* en la lógica posterior del código.
+Instructor injects a strict *schema parser* and forces the LLM to instantiate the `QueryIntent` class. This completely eradicates structural parsing failures and dreaded *KeyErrors* in subsequent code logic.
 
-### 6.4. Diseño Two-Stage Retrieval (Cross-Encoder)
-La implementación del *Re-ranking* ocurre en `src/services/reranker.py`. A diferencia de APIs externas de Re-ranking como Cohere, nuestra solución emplea una librería estática local, **FlashRank**, con el modelo `ms-marco-MiniLM-L-12-v2` corriendo puramente en la memoria RAM del servidor. Este modelo recibe la tupla concatenada $(Pregunta, Contexto\_Vectorial)$ e intercala tokens para encontrar la atención cruzada, mitigando drásticamente el problema de la recuperación de falsos positivos sintácticos generada por el BM25.
+### 6.4. Two-Stage Retrieval Design (Cross-Encoder)
+The *Re-ranking* implementation occurs in `src/services/reranker.py`. Unlike external Re-ranking APIs like Cohere, our solution employs a local static library, **FlashRank**, with the `ms-marco-MiniLM-L-12-v2` model running purely in the server's RAM. This model receives the concatenated tuple $(Query, Vector\_Context)$ and interleaves tokens to find cross-attention, drastically mitigating the syntactic false positive retrieval problem generated by BM25.
 
-### 6.5. Invocación de Herramientas (Function Calling)
-La lógica de intenciones se materializa de forma ingenieril en el nodo `supervisor_node` (`src/services/agent_graph/nodes.py`). Si la instancia de Pydantic generada por el Supervisor marca el `intent_type == "tool_execution"`, el nodo detiene cualquier ruteo vectorial. Lee `tool_name` desde el JSON, extrae la función dinámicamente desde el diccionario Python `TOOLS_REGISTRY` (alojado en `src/services/tools.py`) pasándole los parámetros `**intent.tool_args`, y empuja un nuevo estado al grafo con la respuesta cruda de la API externa (e.j., *HTTP request* a la API de GitHub). Para mitigar riesgos y *hanging* de la interfaz de usuario, las bibliotecas subyacentes operan con cláusulas explícitas de interrupción `timeout=5`.
+### 6.5. Tool Invocation (Function Calling)
+Intent logic physically materializes in the `supervisor_node` (`src/services/agent_graph/nodes.py`). If the Pydantic instance generated by the Supervisor marks `intent_type == "tool_execution"`, the node halts any vector routing. It reads `tool_name` from the JSON, dynamically extracts the function from the Python dictionary `TOOLS_REGISTRY` (housed in `src/services/tools.py`) passing the `**intent.tool_args` parameters, and pushes a new state to the graph with the raw response from the external API (e.g., *HTTP request* to the GitHub API). To mitigate risks and UI *hanging*, underlying libraries operate with explicit `timeout=5` interruption clauses.
 
-## 7. Flujo de Ejecución End-to-End
+---
 
-Para comprender verdaderamente la sinergia arquitectónica de los nodos y subrutinas expuestos anteriormente, esta sección traza analíticamente el ciclo de vida de una consulta completa (e.g., *"¿En qué tecnologías de Cloud y Backend tiene experiencia el candidato, y cómo se relacionan entre sí?"*).
+## 7. End-to-End Execution Flow
 
-### 7.1. Diagrama de Secuencia General
+To truly understand the architectural synergy of the aforementioned nodes and subroutines, this section analytically traces the lifecycle of a complete query (e.g., *"What Cloud and Backend technologies does the candidate have experience with, and how do they relate to each other?"*).
+
+### 7.1. General Sequence Diagram
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as Usuario
+    actor U as User
     participant UI as Streamlit UI
     participant API as FastAPI Router
-    participant Sup as Nodo Supervisor
-    participant Inv as Nodo Investigador
-    participant Gen as Nodo Generador
+    participant Sup as Supervisor Node
+    participant Inv as Researcher Node
+    participant Gen as Generator Node
     participant BD as PostgreSQL (PgVector)
     participant BG as Background Tasks
     
-    U->>UI: Ingresa consulta compleja
+    U->>UI: Inputs complex query
     UI->>API: HTTP POST /chat/stream/ (JWT)
-    API->>API: Autenticación y Extracción Tenant ID
-    API->>BD: Check Semantic Cache (Similitud > 0.85)
+    API->>API: Authentication and Tenant ID Extraction
+    API->>BD: Check Semantic Cache (Similarity > 0.85)
     alt Cache Hit
-        BD-->>API: Respuesta Cacheada
-        API-->>UI: SSE Instantáneo
+        BD-->>API: Cached Response
+        API-->>UI: Instant SSE
     else Cache Miss
-        API->>Sup: Inicializa AgentState
-        Sup->>Sup: LLM: Analiza Intent, genera HyDE y Multi-Query
-        Sup->>Inv: Transición Condicional (knowledge_search)
+        API->>Sup: Initializes AgentState
+        Sup->>Sup: LLM: Analyzes Intent, generates HyDE and Multi-Query
+        Sup->>Inv: Conditional Transition (knowledge_search)
         
         rect rgb(40, 44, 52)
             note right of Inv: Self-Correction Loop (Max Iter: 2)
-            Inv->>BD: Concurrente: Búsqueda Vectorial + BM25 (RRF)
-            Inv->>BD: Concurrente: Extracción GraphRAG (1-hop)
-            Inv->>Inv: Deduplicación Set + Re-ranking (FlashRank)
-            Inv->>Gen: Transición (vector_docs + graph_text)
-            Gen->>Gen: LLM: Intenta Generar Respuesta Pydantic
+            Inv->>BD: Concurrent: Vector Search + BM25 (RRF)
+            Inv->>BD: Concurrent: GraphRAG Extraction (1-hop)
+            Inv->>Inv: Set Deduplication + Re-ranking (FlashRank)
+            Inv->>Gen: Transition (vector_docs + graph_text)
+            Gen->>Gen: LLM: Attempts to Generate Pydantic Response
             
             alt needs_more_info == True & iter < 2
-                Gen-->>Inv: Ruteo: Falla la revisión, retorna al Investigador
-                Inv->>Inv: Iterations += 1 (Re-ejecución con estado ampliado)
-                Inv->>Gen: Transición
+                Gen-->>Inv: Routing: Review fails, returns to Researcher
+                Inv->>Inv: Iterations += 1 (Re-execution with expanded state)
+                Inv->>Gen: Transition
             end
         end
         
-        Gen->>Gen: Genera Respuesta Final Exitosa
+        Gen->>Gen: Final Response Generated Successfully
         Gen->>API: AgentState["final_answer"]
-        API-->>UI: Retorna Respuesta (Streaming SSE)
-        API->>BG: Dispara Tareas Asíncronas Fire-and-forget
-        BG->>BD: Evalúa LLM-as-a-judge (RAGAS-style)
-        BG->>BD: Extrae LTM y guarda en Semantic Cache
+        API-->>UI: Returns Response (Streaming SSE)
+        API->>BG: Fires asynchronous Fire-and-forget tasks
+        BG->>BD: Evaluates LLM-as-a-judge (RAGAS-style)
+        BG->>BD: Extracts LTM and saves to Semantic Cache
     end
 ```
 
-### 7.2. Trazabilidad Paso a Paso del Estado (AgentState)
+### 7.2. Step-by-Step State Trace (AgentState)
 
-1. **Ingreso y Autenticación:** La aplicación `Streamlit` lanza un requerimiento HTTP al *endpoint* `src/api/routers/chat.py`. El middleware intercepta la cabecera, verifica la simetría criptográfica del token JWT (`src/api/auth.py`), extrae el UUID del `tenant_id` y lo acopla al bloque del `AgentState` inicial.
+1. **Ingress and Authentication:** The `Streamlit` application launches an HTTP request to the `src/api/routers/chat.py` *endpoint*. The middleware intercepts the header, verifies the cryptographic symmetry of the JWT token (`src/api/auth.py`), extracts the `tenant_id` UUID, and couples it to the initial `AgentState` block.
 
-2. **Interceptación en Capa de Caché (Costo $\mathcal{O}(0)$ LLM):** Antes de invocar la topología LangGraph, el sistema extrae el *Embedding* de la consulta actual. Se realiza un cruce relacional contra la tabla `semantic_cache`. Si la distancia cosenoidal arroja similitud $\geq 0.85$, el motor interrumpe totalmente la orquestación y retorna el JSON almacenado con $0$ latencia de inferencia Anthropic. Asumamos para este flujo un *Cache Miss*.
+2. **Cache Layer Interception ($\mathcal{O}(0)$ LLM Cost):** Before invoking the LangGraph topology, the system extracts the current query's *Embedding*. A relational crossover is performed against the `semantic_cache` table. If the cosine distance yields a similarity $\geq 0.85$, the engine completely interrupts orchestration and returns the stored JSON with $0$ Anthropic inference latency. Let us assume a *Cache Miss* for this flow.
 
-3. **Invocación del Nodo Supervisor:** 
-   - *Recibe:* `AgentState = {"query": "...", "tenant_id": "...", "iterations": 0}`
-   - *Procesa:* Mediante Instructor, le pide a Claude Haiku que clasifique la petición. El modelo dicta `intent_type = "knowledge_search"`. Procede a generar $3$ permutaciones sinónimas y un párrafo ficticio de respuesta perfecta (HyDE).
-   - *Muta el Estado:* Agrega la lista de variaciones al campo `search_queries`.
-   - *Ruteo:* La función condicional `route_supervisor` inspecciona el estado y transiciona la batuta al Investigador.
+3. **Supervisor Node Invocation:** 
+   - *Receives:* `AgentState = {"query": "...", "tenant_id": "...", "iterations": 0}`
+   - *Processes:* Via Instructor, asks Claude Haiku to classify the request. The model dictates `intent_type = "knowledge_search"`. Proceeds to generate $3$ synonymous permutations and a fictional perfect response paragraph (HyDE).
+   - *Mutates State:* Adds the variations list to the `search_queries` field.
+   - *Routing:* The `route_supervisor` conditional function inspects the state and transitions control to the Researcher.
 
-4. **Invocación del Nodo Investigador (Iteración 1):** 
-   - *Recibe:* El `AgentState` con las $4$ variaciones (Multi-Query + HyDE).
-   - *Procesa:* Abre conexiones `asyncpg`, aplica el filtro local `SET app.current_tenant` para acatar la RLS, y despacha corrutinas paralelas `asyncio.gather` recuperando chunks mediante Reciprocal Rank Fusion ($k=60$) y tripletas del grafo de red semántica difusa. El sistema fusiona las listas, implementa *Hashing* de Python eliminando duplicados idénticos de texto, y reduce la carga semántica pasando el conjunto limpio por el Cross-Encoder (FlashRank) fijando un límite final de los mejores 10 trozos.
-   - *Muta el Estado:* Inserta los documentos en `documents` e incrementa matemáticamente el contador: `iterations = 1`.
-   - *Ruteo:* Arista fija hacia el Generador.
+4. **Researcher Node Invocation (Iteration 1):** 
+   - *Receives:* `AgentState` with the $4$ variations (Multi-Query + HyDE).
+   - *Processes:* Opens `asyncpg` connections, applies the local `SET app.current_tenant` filter to comply with RLS, and dispatches parallel `asyncio.gather` coroutines retrieving chunks via Reciprocal Rank Fusion ($k=60$) and fuzzy semantic network graph triplets. The system merges the lists, implements Python *Hashing* eliminating identical text duplicates, and reduces the semantic load by passing the clean set through the Cross-Encoder (FlashRank), fixing a final limit of the best 10 chunks.
+   - *Mutates State:* Inserts documents into `documents` and mathematically increments the counter: `iterations = 1`.
+   - *Routing:* Fixed edge to Generator.
 
-5. **Invocación del Nodo Generador y Self-Correction (Iteración 2):**
-   - *Recibe:* El `AgentState` denso. Adicionalmente, el nodo invoca pasivamente a la memoria a largo plazo (LTM) para inyectar preferencias históricas en el bloque de variables de la plantilla (Prompt Template).
-   - *Procesa:* La lógica solicita al LLM redactar la estructura. El LLM detecta que el contexto léxico recuperado no logra explicar a profundidad "la relación" entre el Cloud y el Backend, por lo que asienta `requires_more_info = True`.
-   - *Ruteo:* La función interceptora `route_reviewer` detecta el flag encendido. Como `iterations` ($1$) es menor al límite máximo ($2$), la función de transición dicta `return "researcher"`. El bucle retrocede físicamente hacia atrás en el grafo. 
+5. **Generator Node Invocation and Self-Correction (Iteration 2):**
+   - *Receives:* The dense `AgentState`. Additionally, the node passively invokes long-term memory (LTM) to inject historical preferences into the Template variables block (Prompt Template).
+   - *Processes:* Logic asks the LLM to draft the structure. The LLM detects that the retrieved lexical context fails to deeply explain "the relationship" between Cloud and Backend, and thus asserts `requires_more_info = True`.
+   - *Routing:* The `route_reviewer` interceptor function detects the enabled flag. Since `iterations` ($1$) is less than the maximum limit ($2$), the transition function dictates `return "researcher"`. The loop physically backtracks in the graph. 
 
-6. **Generación Final y Streaming SSE:** El Nodo Investigador repite el ciclo y le vuelve a entregar estado fresco al Nodo Generador (`iterations = 2`). Tras el reproceso, el modelo compila la estructura satisfactoriamente (flag a `False`). La respuesta generada en Markdown con citas `[Doc X]` se asigna a la clave `final_answer`. Se detiene el grafo, y el *router* de FastAPI encapsula el bloque de texto en Server-Sent Events, despachándolo gradualmente al *Frontend*.
+6. **Final Generation and Streaming SSE:** The Researcher Node repeats the cycle and delivers fresh state back to the Generator Node (`iterations = 2`). After reprocessing, the model successfully compiles the structure (flag to `False`). The Markdown response generated with `[Doc X]` citations is assigned to the `final_answer` key. The graph halts, and the FastAPI *router* encapsulates the text block in Server-Sent Events, gradually dispatching it to the *Frontend*.
 
-7. **Procesos en Segundo Plano (Asíncronos):** El usuario ya recibió la visualización completa de su respuesta. Sin embargo, el servidor de Uvicorn no mata el *request*. Se disparan *Background Tasks* integradas en FastAPI:
-   - Se vectoriza la respuesta y la pregunta final guardándose en la base de datos (Caché Semántico).
-   - Se ejecuta el proceso masivo del **Evaluador Pasivo (LLM-as-a-judge)** que invierte tiempo computacional midiendo matemáticamente la *Fidelidad* y *Precisión* del proceso que acaba de terminar, archivando las métricas en la tabla `rag_evaluations` para auditoría administrativa.
-
-## 8. Evaluación y Observabilidad Activa
-
-Medir la efectividad de un sistema generativo complejo, cuyas salidas no son deterministas (en términos de la concatenación exacta de caracteres) es uno de los mayores desafíos del *AI Engineering*. La arquitectura Sandbox abandonó tempranamente la recolección empírica humana (A/B Testing en la vista de Streamlit) para adoptar un marco automático en la nube profunda.
-
-### 8.1. Implementación de LLM-as-a-judge (Estilo RAGAS)
-En lugar de depender de *scripts* síncronos de testing, el sistema introdujo un paradigma de Evaluación Pasiva Continua. Se desarrolló un agente dedicado en `src/services/evaluator.py` que recibe de forma asíncrona (a través del `BackgroundTask` de FastAPI) la triada fundamental: (1) La pregunta original del usuario, (2) el conjunto de fragmentos de texto recuperados del motor de búsqueda híbrido, y (3) la respuesta final emitida por el nodo Generador.
-
-Inspirado en el framework RAGAS (Retrieval Augmented Generation Assessment), este agente le delega al modelo fundacional Claude Haiku la tarea de auditar la respuesta en las siguientes tres métricas de rendimiento estandarizadas probabilísticamente en el intervalo $[0.0, 1.0]$:
-- **Faithfulness (Fidelidad de Hechos):** Evalúa un problema común donde el LLM, para rellenar espacios en la semántica, inyecta sesgos implícitos en sus pesos pre-entrenados inventando información no amparada en los documentos provistos.
-- **Answer Relevance (Relevancia Final):** Evalúa las penalizaciones direccionales. Aún si la respuesta posee una alta fidelidad a los documentos recuperados, es posible que no ataque el fondo semántico original del usuario.
-- **Context Precision (Precisión de Recuperación):** Mide la densidad de ruido versus conocimiento útil extraído por los nodos de base de datos. Sirve para calibrar si el Top-K del *Cross-Encoder* está aportando valor.
-
-Los resultados (y un párrafo adicional exigido al LLM explicando la cadena de pensamiento deductivo y el porqué matemático de los puntajes) se persisten bajo Row-Level Security en la tabla SQL `rag_evaluations`.
-
-### 8.2. Limitaciones Actuales y Ausencia de Benchmarks Sistémicos
-Históricamente, en la Fase 1 del proyecto, se utilizó el framework `DeepEval` sobre la capa de validación `pytest` (ver archivo residual `tests/test_rag.py`). Sin embargo, dicho paradigma asume una arquitectura puramente lineal sincrónica; al evolucionar el sistema hacia un *StateGraph* Multi-Agente asíncrono con *Self-Correction*, el testing unitario determinista clásico se volvió arquitectónicamente obsoleto y fue retirado de la ruta activa.
-
-Si bien la infraestructura del Evaluador Pasivo (Sección 8.1) se encuentra 100% activa capturando calificaciones analíticas iteración por iteración en la base de datos de producción, **el sistema carece actualmente de una evaluación formal agregada a gran escala**. No existe un *dashboard* analítico interno para visualizar gráficas temporales de degradación del sistema, ni se han recolectado métricas de distribución poblacional sobre conjuntos de datos etiquetados (*Golden Datasets*).
-
-[PENDIENTE: Discutir propuesta teórica]
-**Propuesta de Evaluación Futura:** Para cuantificar robustamente la arquitectura LangGraph actual, el trabajo futuro debería enmarcar una evaluación automatizada continua (CI/CD) donde el motor responda 10,000 preguntas sintéticas (generadas inversamente desde los propios documentos), consolidando el porcentaje de fallos en el *Self-Correction* e introduciendo instrumentación de APM (Application Performance Monitoring) estricta (ej., *Langfuse*, ya presente pero sub-utilizado) para mapear el *Time-To-First-Token* (TTFT), la latencia total de ruteo $\mathcal{O}(T)$ y el costo de inferencia económico medido en dólares por cada 1,000 requests asíncronos.
-
-## 9. Decisiones de Diseño y Trade-offs
-
-Construir un ecosistema de IA Autónomo de grado de producción (Enterprise) exige constantes sacrificios de diseño. En esta sección detallamos las alternativas evaluadas durante la fase de orquestación y las justificaciones algorítmicas de la estructura actual.
-
-### 9.1. LangGraph vs. Routers Heurísticos Lineales
-**Alternativa considerada:** En la Fase 2 del proyecto, el sistema enrutaba la lógica usando clásicas sentencias `if/else` rígidas en código Python. Dependiendo de la detección de un flag estático, el hilo invocaba una herramienta o una base de datos de manera secuencial.
-**Decisión adoptada:** Orquestar mediante una FSM cíclica (**LangGraph**).
-**Justificación (Trade-off):** Los *pipelines* lineales son asintóticamente más rápidos y exigen una menor carga cognitiva del desarrollador (fáciles de depurar). Sin embargo, son inherentemente frágiles: carecen de flexibilidad recursiva para la autocorrección. Al introducir *LangGraph*, añadimos un ligero coste computacional en la instanciación de los nodos y el paso de estados en cada transición (sobrecarga de memoria), pero logramos habilitar los bucles de *Self-Correction* (Secciones 4.2 y 5.4), permitiendo al agente reintentar búsquedas fallidas y aislar conceptualmente las tareas (Investigación vs. Revisión) en instancias independientes, incrementando exponencialmente la resistencia de los LLMs frente a consultas adversas o ambiguas.
-
-### 9.2. Dependencias de Re-ranking: Parche de Modelos y Riesgo Operacional
-**Alternativa considerada:** Utilizar servicios de *Cross-Encoder* en la nube (como *Cohere Rerank API*) u hospedar modelos masivos tipo BERT ($>300\text{M}$ parámetros).
-**Decisión adoptada:** Correr *FlashRank* in-memory con un modelo de conocimiento destilado ultra-liviano. Originalmente se estipuló `ms-marco-TinyBERT-L-2-v2`. Sin embargo, debido a un error crítico de infraestructura externa ajeno al sistema (error 404 por un binario de pesos corrompido en el *bucket* de Google Cloud Platform mantenido por la comunidad), el proyecto ejecutó un parche táctico forzando la inferencia local sobre `ms-marco-MiniLM-L-12-v2` (`src/services/reranker.py`).
-**Justificación (Trade-off):** Evitar servicios remotos (Cohere) elimina latencias de red y reduce costos operativos continuos en entornos RAG, reteniendo la privacidad total de los documentos de la empresa bajo el esquema interno Multi-Tenant. No obstante, anclar arquitecturas a modelos locales ligeros mantenidos por librerías *Open-Source* emergentes (FlashRank) expone al sistema al riesgo de enlaces rotos o descargas de pesos neuronales fallidas. El *fallback* a `MiniLM-12` sacrificó milisegundos de latencia in-memory, a cambio de una estabilidad inmediata para cerrar el pase a producción.
-
-### 9.3. PostgreSQL Integrado vs. Bases de Datos Vectoriales Dedicadas
-**Alternativa considerada:** Mantener una base de datos relacional para usuarios (MySQL/Postgres) y un microservicio vectorial independiente (Pinecone, Qdrant, o Milvus) para el motor de RAG.
-**Decisión adoptada:** Arquitectura centralizada y monolítica de datos usando **PostgreSQL 16** con `pgvector` y búsqueda `Full-Text Search` (BM25) nativa.
-**Justificación (Trade-off):** Extraer los vectores hacia Pinecone suele ofrecer optimizaciones microscópicas en latencia a escalas extremadamente masivas (billones de vectores). Sin embargo, fraccionar los datos impide las uniones relacionales (SQL `JOIN`). Nuestra decisión unificó la lógica permitiendo cruzar la tabla `documents` con la de metadatos corporativos en milisegundos, a la vez que habilitó el uso nativo de *Row-Level Security (RLS)*, garantizando de manera inquebrantable el particionamiento absoluto de la memoria, documentos y métricas entre clientes (Multi-Tenant) sin riesgo humano de inyección o desincronización transaccional.
-
-## 10. Limitaciones y Trabajo Futuro
-
-Si bien el *AI Engineer Sandbox* consolida una arquitectura en producción altamente resistente, el análisis riguroso expone ciertas deficiencias estructurales que restringen su operación escalar bajo ecosistemas de mayor entropía.
-
-### 10.1. Degradación Léxica Monolingüe (BM25)
-La función de búsqueda léxica nativa de PostgreSQL (`src/services/retriever.py`, Línea 24) utiliza una coerción tipográfica dura sobre el diccionario del analizador: `ts_rank(fts, websearch_to_tsquery('spanish', $3))`. Aunque es altamente efectivo para corpus locales latinoamericanos, esta fijación degrada agresivamente el *stemming* (algoritmo de reducción a la raíz de una palabra) y la detención ortográfica (*stop words*) si se indexan documentos en lenguas secundarias (e.g., inglés o portugués). 
-**Trabajo Futuro:** Dinamizar el tipo de diccionario `ts_config` acoplándolo al metadato del idioma real detectado del documento durante la ingesta.
-
-### 10.2. Algoritmia Ingenua de GraphRAG (Topología Plana)
-El módulo GraphRAG extrae eficientemente las tripletas mediante LLMs (`src/services/graphrag.py`), sin embargo, su heurística de recuperación es sub-óptima. En lugar de atravesar el grafo calculando algoritmos de modularidad (detección de comunidades de Leiden) o centralidad de intermediación (*Betweenness Centrality*), el sistema utiliza una coincidencia de expresiones regulares plana (`\w+`) forzando interpolaciones de 1-hop limitadas arbitrariamente a $10$ nodos.
-**Trabajo Futuro:** Implementar caminatas aleatorias (Random Walks / PageRank) integrando bases topológicas puras (como Neo4j) o grafos de NetworkX pesados en memoria, habilitando respuestas a preguntas de razonamiento inferencial que exigen saltos $k \geq 3$.
-
-### 10.3. Carencia de Políticas de Expiración en Caché Semántico
-La tabla `semantic_cache` inserta los *Embeddings* de manera perpetua. Al no poseer un mecanismo de recolección de basura (*Garbage Collection*) o un TTL (*Time-To-Live*) parametrizado mediante trabajos cron (CRON Jobs) programados, el tamaño de los índices HNSW crecerá indiscriminadamente en producción, impactando dramáticamente el almacenamiento y la latencia asintótica del *event loop* de la base de datos.
-
-### 10.4. Brechas de Infraestructura (Contenerización y Benchmarks)
-El despliegue está desacoplado a nivel de bases de datos (`docker-compose.yml`), pero la aplicación principal en FastAPI no se ha encapsulado en un archivo `Dockerfile`, forzando instalaciones de dependencia atadas a la arquitectura local (bare-metal) del desarrollador. Adicionalmente, tal como se abordó en la Sección 8.2, no existen telemetrías estructuradas o tableros que permitan realizar perfilado (profiling) matemático continuo de latencia o consumo económico por token.
+7. **Background Processes (Asynchronous):** The user has already received the complete visualization of their response. However, the Uvicorn server does not kill the *request*. FastAPI built-in *Background Tasks* are fired:
+   - The final query and response are vectorized and saved to the database (Semantic Cache).
+   - The massive **Passive Evaluator (LLM-as-a-judge)** process runs, investing computational time to mathematically measure the *Faithfulness* and *Precision* of the just-completed process, archiving the metrics in the `rag_evaluations` table for administrative auditing.
 
 ---
 
-## 11. Conclusión
+## 8. Evaluation and Active Observability
 
-Este trabajo formaliza la transición conceptual desde los sistemas RAG puramente deterministas hacia la abstracción de agentes autónomos y redes semánticas. La arquitectura desarrollada evidencia que el control sobre el flujo computacional a través de máquinas de estados dirigidas (*LangGraph*), acoplado a la seguridad nativa transaccional (*Row-Level Security*), mitiga abismalmente la amnesia y la propensión a la alucinación inherente en LLMs generativos. 
+Measuring the effectiveness of a complex generative system, whose outputs are non-deterministic (in terms of exact character concatenation), is one of the greatest challenges in *AI Engineering*. The Sandbox architecture early on abandoned human empirical gathering (A/B Testing in the Streamlit view) to adopt an automatic framework in the deep cloud.
 
-Al encapsular el *Two-Stage Retrieval*, el *Self-Correction*, el Caché Semántico, la Memoria a Largo Plazo y una orquestación continua de *LLM-as-a-judge* en *Background* sobre un clúster monolítico optimizado en *PostgreSQL pgvector*, el **AI Engineer Sandbox** emerge no solo como un experimento computacional aislado, sino como una plantilla escalable y observable con el rigor estructural demandado por las arquitecturas de grado *Enterprise* contemporáneas.
+### 8.1. LLM-as-a-judge Implementation (RAGAS Style)
+Instead of relying on synchronous testing *scripts*, the system introduced a Continuous Passive Evaluation paradigm. A dedicated agent was developed in `src/services/evaluator.py` that asynchronously receives (via FastAPI's `BackgroundTask`) the fundamental triad: (1) The user's original query, (2) the set of text fragments retrieved from the hybrid search engine, and (3) the final response emitted by the Generator node.
 
-## 12. Referencias
+Inspired by the RAGAS (Retrieval Augmented Generation Assessment) framework, this agent delegates to the Claude Haiku foundational model the task of auditing the response across the following three standardized performance metrics, probabilistically bound to the interval $[0.0, 1.0]$:
+- **Faithfulness:** Evaluates a common problem where the LLM, to fill semantic gaps, injects implicit biases from its pre-trained weights by inventing information not backed by the provided documents.
+- **Answer Relevance:** Evaluates directional penalties. Even if the answer possesses high faithfulness to the retrieved documents, it might fail to tackle the user's original semantic intent.
+- **Context Precision:** Measures signal-to-noise density to evaluate if the extracted fragments provided true useful knowledge rather than filler text from adjacent chunks. Serves to calibrate if the *Cross-Encoder* Top-K is providing value.
+
+The results (and an additional paragraph demanded from the LLM explaining the deductive chain of thought and mathematical reasoning behind the scores) are persisted under Row-Level Security in the `rag_evaluations` SQL table.
+
+### 8.2. Current Limitations and Absence of Systemic Benchmarks
+Historically, in Phase 1 of the project, the `DeepEval` framework was used over the `pytest` validation layer (see residual file `tests/test_rag.py`). However, this paradigm assumes a purely linear synchronous architecture; as the system evolved into an asynchronous Multi-Agent *StateGraph* with *Self-Correction*, classic deterministic unit testing became architecturally obsolete and was retired from the active path.
+
+While the Passive Evaluator infrastructure (Section 8.1) is 100% active capturing analytical scores iteration by iteration in the production database, **the system currently lacks a formal aggregated large-scale evaluation**. There is no internal analytical *dashboard* to visualize temporal system degradation graphs, nor have population distribution metrics been collected over labeled datasets (*Golden Datasets*).
+
+**Future Evaluation Proposal:** To robustly quantify the current LangGraph architecture, future work should frame a continuous automated evaluation (CI/CD) where the engine answers 10,000 synthetic questions (reverse-generated from the documents themselves), consolidating the *Self-Correction* failure rate and introducing strict APM (Application Performance Monitoring) instrumentation (e.g., *Langfuse*, already present but underutilized) to map the *Time-To-First-Token* (TTFT), total routing latency $\mathcal{O}(T)$, and economic inference cost measured in dollars per 1,000 asynchronous requests.
+
+---
+
+## 9. Design Decisions and Trade-offs
+
+Building an Enterprise-grade Autonomous AI ecosystem demands constant design sacrifices. In this section, we detail the alternatives evaluated during the orchestration phase and the algorithmic justifications for the current structure.
+
+### 9.1. LangGraph vs. Linear Heuristic Routers
+**Alternative considered:** In Phase 2 of the project, the system routed logic using classic, rigid `if/else` statements in Python code. Depending on a static flag detection, the thread invoked a tool or a database sequentially.
+**Decision adopted:** Orchestrate using a cyclic FSM (**LangGraph**).
+**Justification (Trade-off):** Linear *pipelines* are asymptotically faster and demand lower cognitive load from the developer (easier to debug). However, they are inherently fragile: they lack recursive flexibility for self-correction. By introducing *LangGraph*, we added a slight computational cost in node instantiation and state passing in each transition (memory overhead), but we managed to enable *Self-Correction* loops (Sections 4.2 and 5.4), allowing the agent to retry failed searches and conceptually isolate tasks (Research vs. Review) into independent instances, exponentially increasing LLM resilience against adversarial or ambiguous queries.
+
+### 9.2. Re-ranking Dependencies: Model Patching and Operational Risk
+**Alternative considered:** Use cloud *Cross-Encoder* services (like *Cohere Rerank API*) or host massive BERT-like models ($>300\text{M}$ parameters).
+**Decision adopted:** Run *FlashRank* in-memory with an ultra-lightweight distilled knowledge model. Originally, `ms-marco-TinyBERT-L-2-v2` was stipulated. However, due to a critical external infrastructure error outside the system (a 404 error for a corrupted weight binary in a community-maintained Google Cloud Platform *bucket*), the project executed a tactical patch forcing local inference over `ms-marco-MiniLM-L-12-v2` (`src/services/reranker.py`).
+**Justification (Trade-off):** Avoiding remote services (Cohere) eliminates network latencies and reduces continuous operational costs in RAG environments, retaining full privacy of enterprise documents under the internal Multi-Tenant scheme. Nonetheless, anchoring architectures to lightweight local models maintained by emerging *Open-Source* libraries (FlashRank) exposes the system to the risk of broken links or failed neural weight downloads. The *fallback* to `MiniLM-12` sacrificed milliseconds of in-memory latency in exchange for immediate stability to seal the production release.
+
+### 9.3. Integrated PostgreSQL vs. Dedicated Vector Databases
+**Alternative considered:** Maintain a relational database for users (MySQL/Postgres) and an independent vector microservice (Pinecone, Qdrant, or Milvus) for the RAG engine.
+**Decision adopted:** Centralized, monolithic data architecture using **PostgreSQL 16** with `pgvector` and native `Full-Text Search` (BM25).
+**Justification (Trade-off):** Offloading vectors to Pinecone usually offers microscopic latency optimizations at extremely massive scales (billions of vectors). However, fracturing data prevents relational unions (SQL `JOIN`). Our decision unified the logic allowing the `documents` table to cross-reference corporate metadata in milliseconds, while enabling the native use of *Row-Level Security (RLS)*. This unbreakably guarantees the absolute partitioning of memory, documents, and metrics between clients (Multi-Tenant) without human risk of injection or transactional desynchronization.
+
+---
+
+## 10. Limitations and Future Work
+
+While the *AI Engineer Sandbox* consolidates a highly resilient production architecture, rigorous analysis exposes certain structural deficiencies that restrict its scalar operation under higher-entropy ecosystems.
+
+### 10.1. Monolingual Lexical Degradation (BM25)
+The native PostgreSQL lexical search function (`src/services/retriever.py`, Line 24) uses a hard type coercion on the analyzer dictionary: `ts_rank(fts, websearch_to_tsquery('spanish', $3))`. Although highly effective for local Latin American corpuses, this fixation aggressively degrades *stemming* (reducing a word to its root) and *stop words* interception if documents in secondary languages (e.g., English or Portuguese) are indexed. 
+**Future Work:** Make the `ts_config` dictionary type dynamic by coupling it to the actual language metadata detected from the document during ingestion.
+
+### 10.2. Naive GraphRAG Algorithm (Flat Topology)
+The GraphRAG module efficiently extracts triplets via LLMs (`src/services/graphrag.py`); however, its retrieval heuristic is sub-optimal. Instead of traversing the graph calculating modularity algorithms (Leiden community detection) or Betweenness Centrality, the system uses a flat regular expression match (`\w+`) forcing 1-hop interpolations arbitrarily limited to $10$ nodes.
+**Future Work:** Implement Random Walks (PageRank) integrating pure topological databases (like Neo4j) or heavy in-memory NetworkX graphs, enabling answers to inferential reasoning questions that demand hops $k \geq 3$.
+
+### 10.3. Lack of Semantic Cache Expiration Policies
+The `semantic_cache` table inserts *Embeddings* perpetually. Lacking a Garbage Collection mechanism or a TTL (*Time-To-Live*) parameterized via scheduled CRON Jobs, the HNSW index sizes will grow indiscriminately in production, dramatically impacting storage and the asymptotic latency of the database event loop.
+
+### 10.4. Infrastructure Gaps (Containerization and Benchmarks)
+Deployment is decoupled at the database level (`docker-compose.yml`), but the main FastAPI application has not been encapsulated in a `Dockerfile`, forcing dependency installations tied to the developer's local bare-metal architecture. Additionally, as addressed in Section 8.2, there are no structured telemetries or dashboards allowing for continuous mathematical profiling of latency or economic consumption per token.
+
+---
+
+## 11. Conclusion
+
+This work formalizes the conceptual transition from purely deterministic RAG systems towards the abstraction of autonomous agents and semantic networks. The developed architecture demonstrates that computational flow control via directed state machines (*LangGraph*), coupled with native transactional security (*Row-Level Security*), vastly mitigates amnesia and the hallucination propensity inherent in generative LLMs.
+
+By encapsulating *Two-Stage Retrieval*, *Self-Correction*, Semantic Caching, Long-Term Memory, and continuous background orchestration of *LLM-as-a-judge* onto a monolithic cluster optimized in *PostgreSQL pgvector*, the **AI Engineer Sandbox** emerges not merely as an isolated computational experiment, but as a scalable and observable template with the structural rigor demanded by contemporary *Enterprise*-grade architectures.
+
+---
+
+## 12. References
 
 [1] Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., ... & Yih, W. T. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. *Advances in Neural Information Processing Systems, 33*, 9459-9474.
 
@@ -433,23 +451,23 @@ Al encapsular el *Two-Stage Retrieval*, el *Self-Correction*, el Caché Semánti
 
 ---
 
-## 13. Apéndices
+## 13. Appendices
 
-### 13.1. Prompts Principales del Sistema
+### 13.1. Main System Prompts
 
-**Prompt del Nodo Supervisor (Router):**
-> "Eres el 'Router' de un AI Engineer Sandbox que actualmente está analizando el currículum y perfil profesional del ingeniero Bryan Bobadilla. Determina la intención de la entrada usando estas reglas: `casual_greeting`, `knowledge_search`, `tool_execution`, o `out_of_scope`. Si la intención es 'knowledge_search': 1. Genera 3 variaciones diferentes de la pregunta en `search_queries` para abarcar sinónimos y redacciones distintas (Multi-Query). Resuelve la correferencia en todas las variaciones. 2. Redacta un `hypothetical_document` de 2-3 oraciones fingiendo ser el fragmento ideal que respondería a la pregunta, usando terminología técnica exacta (HyDE)."
+**Supervisor Node Prompt (Router):**
+> "You are the 'Router' of an AI Engineer Sandbox currently analyzing the resume and professional profile of engineer Bryan Bobadilla. Determine the intent of the input using these rules: `casual_greeting`, `knowledge_search`, `tool_execution`, or `out_of_scope`. If the intent is 'knowledge_search': 1. Generate 3 different variations of the question in `search_queries` to cover synonyms and different wordings (Multi-Query). Resolve coreference across all variations. 2. Draft a `hypothetical_document` of 2-3 sentences pretending to be the ideal fragment that would answer the question, using exact technical terminology (HyDE)."
 
-**Prompt del Nodo Generador:**
-> "Eres un experto respondiendo preguntas basado estrictamente en el contexto proporcionado. Tu objetivo es formular respuestas claras, precisas y rigurosas. IMPORTANTE: Cuando afirmes algo, DEBES citar la fuente usando el formato [Doc ID]. Si la información proporcionada no es suficiente para responder la pregunta, indica que necesitas más contexto. Contexto sobre el usuario: {user_profile}."
+**Generator Node Prompt:**
+> "You are an expert answering questions strictly based on the provided context. Your goal is to formulate clear, precise, and rigorous answers. IMPORTANT: When you assert something, you MUST cite the source using the format [Doc ID]. If the provided information is not sufficient to answer the question, indicate that you need more context. User context: {user_profile}."
 
-**Prompt del Evaluador (LLM-as-a-judge):**
-> "Eres un juez imparcial evaluando un sistema RAG. Tu trabajo es evaluar 3 métricas de 0.0 a 1.0 basándote estrictamente en la PREGUNTA, CONTEXTO y RESPUESTA proporcionadas. 1. Faithfulness (Fidelidad). 2. Answer Relevance (Relevancia de la Respuesta). 3. Context Precision (Precisión del Contexto)."
+**Evaluator Prompt (LLM-as-a-judge):**
+> "You are an impartial judge evaluating a RAG system. Your job is to evaluate 3 metrics from 0.0 to 1.0 based strictly on the provided QUESTION, CONTEXT, and ANSWER. 1. Faithfulness. 2. Answer Relevance. 3. Context Precision."
 
-### 13.2. Esquemas DDL Principales (SQL)
+### 13.2. Main DDL Schemas (SQL)
 
 ```sql
--- Estructura Híbrida Vectorial + Léxica
+-- Hybrid Vector + Lexical Structure
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
@@ -463,16 +481,16 @@ CREATE INDEX ON documents USING GIN (fts);
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ```
 
-### 13.3. Glosario de Notación Matemática
-- $D, d$: Corpus global de documentos, Documento discreto.
-- $\mathbf{v}_q, \mathbf{e}_i$: Vector latente de la consulta $q$, Embedding vectorial de una oración $i$.
-- $R_v(d), R_f(d)$: Rango escalar indexado posicional (1, 2, 3...) otorgado al documento $d$ por distancia vectorial o coincidencia léxica, respectivamente.
-- $k$: Constante de penalización del Reciprocal Rank Fusion.
-- $\text{Dist}_{\text{cos}}$: Función de distancia de Coseno.
-- $\tau$: Umbral de corte condicional escalar del *Semantic Chunking*.
-- $\mu, \sigma$: Media aritmética y desviación estándar poblacional de las distancias semánticas.
+### 13.3. Mathematical Notation Glossary
+- $D, d$: Global document corpus, Discrete document.
+- $\mathbf{v}_q, \mathbf{e}_i$: Query latent vector $q$, Vector embedding of a sentence $i$.
+- $R_v(d), R_f(d)$: Positional indexed scalar rank (1, 2, 3...) awarded to document $d$ by vector distance or lexical match, respectively.
+- $k$: Reciprocal Rank Fusion penalty constant.
+- $\text{Dist}_{\text{cos}}$: Cosine distance function.
+- $\tau$: Scalar conditional cutoff threshold for *Semantic Chunking*.
+- $\mu, \sigma$: Arithmetic mean and population standard deviation of semantic distances.
 
-### 13.4. Preguntas Abiertas
-1. **Curva de Rendimiento de RRF ($k$):** El modelo utiliza $k=60$ heurísticamente. No hay constancia matemática interna que pruebe que 60 sea superior a $k=50$ para los modelos multilingües de MiniLM. ¿Qué porcentaje de precisión se pierde con este valor?
-2. **Expiración Estática de HNSW:** Al no haber política de TTL (Time-To-Live) en el `semantic_cache`, la distancia cosenoidal será buscada contra vectores obsoletos, lo cual desestabilizaría al índice HNSW si los embeddings experimentan un *drift* de dominio en futuras fases de producción.
-3. **Escalabilidad Horizontal:** Actualmente, FlashRank opera *in-memory* compartiendo el hilo I/O del host. ¿En qué cuota de transacciones (RPS) el re-ranking satura la memoria RAM e invoca cuellos de botella forzando la extracción a un clúster *bare-metal* dedicado?
+### 13.4. Open Questions
+1. **RRF Performance Curve ($k$):** The model uses $k=60$ heuristically. There is no internal mathematical evidence proving that 60 is superior to $k=50$ for multilingual MiniLM models. What percentage of precision is lost with this value?
+2. **Static HNSW Expiration:** Lacking a TTL (Time-To-Live) policy in the `semantic_cache`, the cosine distance will be searched against obsolete vectors, which would destabilize the HNSW index if embeddings experience domain drift in future production phases.
+3. **Horizontal Scalability:** Currently, FlashRank operates *in-memory* sharing the host's I/O thread. At what transaction quota (RPS) does re-ranking saturate RAM and invoke bottlenecks forcing extraction to a dedicated bare-metal cluster?

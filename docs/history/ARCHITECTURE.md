@@ -1,39 +1,39 @@
-# Arquitectura Técnica del RAG Pipeline
+# RAG Pipeline Technical Architecture
 
-Este documento detalla el diseño técnico, el flujo de datos y los componentes implementados hasta el momento en el proyecto **AI Engineer Sandbox**.
+This document describes the technical design, the data flow and the components implemented so far in the **AI Engineer Sandbox** project.
 
-## Diagrama de Arquitectura del Pipeline
+## Pipeline architecture diagram
 
-El siguiente diagrama muestra el flujo completo de información, desde la ingestión de documentos hasta la recuperación en dos fases y la posterior generación estructurada.
+The following diagram shows the full flow of information, from document ingestion to two-stage retrieval and the structured generation that follows.
 
 ```mermaid
 graph TD
-    %% Ingestión
-    subgraph Ingestion [Fase 1: Ingestión de Datos]
-        A[Documento Markdown] -->|Lectura| B(Chunker: tiktoken)
-        B -->|Chunks de Texto| C(Embedder Local: all-MiniLM-L6-v2)
-        C -->|Vectores 384d + Metadatos| D[(PostgreSQL + pgvector)]
+    %% Ingestion
+    subgraph Ingestion [Phase 1: Data Ingestion]
+        A[Markdown Document] -->|Read| B(Chunker: tiktoken)
+        B -->|Text Chunks| C(Local Embedder: all-MiniLM-L6-v2)
+        C -->|384d Vectors + Metadata| D[(PostgreSQL + pgvector)]
     end
 
-    %% Recuperación y Re-ranking
-    subgraph Retrieval [Fase 2: Recuperación Two-Stage]
-        E[Pregunta del Usuario] --> F(Embedder Local: all-MiniLM-L6-v2)
-        F -->|Vector Query| G{Búsqueda Híbrida / Similitud Coseno}
+    %% Retrieval and re-ranking
+    subgraph Retrieval [Phase 2: Two-Stage Retrieval]
+        E[User Question] --> F(Local Embedder: all-MiniLM-L6-v2)
+        F -->|Vector Query| G{Hybrid Search / Cosine Similarity}
         D --> G
-        G -->|Top-K Candidatos Vectoriales| H(Cross-Encoder Reranker: FlashRank)
-        H -->|Candidatos Re-ordenados| I[Resultados de Alta Relevancia]
+        G -->|Top-K Vector Candidates| H(Cross-Encoder Reranker: FlashRank)
+        H -->|Reordered Candidates| I[High-Relevance Results]
     end
 
-    %% Generación
-    subgraph Generation [Fase 3: Generación Estructurada]
-        I --> J(Extractor / Generador)
+    %% Generation
+    subgraph Generation [Phase 3: Structured Generation]
+        I --> J(Extractor / Generator)
         E --> J
-        J -->|Prompt + Contexto| K[Anthropic Claude 3.5]
-        K -->|Respuesta Validada| L((Instructor + Pydantic))
-        L --> M[Respuesta Final JSON/Pydantic]
+        J -->|Prompt + Context| K[Anthropic Claude 3.5]
+        K -->|Validated Answer| L((Instructor + Pydantic))
+        L --> M[Final JSON/Pydantic Answer]
     end
 
-    %% Observabilidad
+    %% Observability
     O((Langfuse Observability)) -.- B
     O -.- C
     O -.- G
@@ -43,39 +43,38 @@ graph TD
 
 ---
 
-## Componentes Técnicos Detallados
+## Technical components in detail
 
-### 1. Modelos de Datos (`src/models/`)
-Utilizamos **Pydantic v2** para definir contratos estrictos en todo el pipeline:
-- `SearchResult`: Define la estructura base de un candidato retornado por PostgreSQL (ID, texto, metadatos, score vectorial).
-- `RerankedResult`: Hereda de `SearchResult` añadiendo el `rerank_score` generado por el Cross-Encoder.
-- `StructuredAnswer` & `AnswerSource`: Modelos de salida forzada para el LLM. Obligan a la IA a proveer un puntaje de confianza, fuentes citadas y banderas booleanas (ej. `requires_more_info`).
+### 1. Data models (`src/models/`)
+We use **Pydantic v2** to define strict contracts across the whole pipeline:
+- `SearchResult`: the base structure of a candidate returned by PostgreSQL (ID, text, metadata, vector score).
+- `RerankedResult`: inherits from `SearchResult`, adding the `rerank_score` produced by the cross-encoder.
+- `StructuredAnswer` & `AnswerSource`: forced output models for the LLM. They make the AI provide a confidence score, cited sources and boolean flags (e.g. `requires_more_info`).
 
-### 2. Ingestión (`src/services/ingestion.py`)
-- **Procesamiento de Texto:** Se utiliza `tiktoken` (cl100k_base) de forma determinista para realizar *chunking* de 256 tokens con un solapamiento de 30 tokens. Esto es ideal para modelos de embedding pequeños.
-- **Vectorización:** Emplea `sentence-transformers` con el modelo `all-MiniLM-L6-v2` corriendo localmente en CPU/GPU para crear embeddings densos de 384 dimensiones. No requiere red ni tiene coste por token.
-- **Almacenamiento:** Conexión asíncrona mediante `asyncpg` hacia **PostgreSQL 16**. Los vectores se guardan en una columna `vector(384)` provista por la extensión `pgvector`.
+### 2. Ingestion (`src/services/ingestion.py`)
+- **Text processing:** `tiktoken` (cl100k_base) is used deterministically for *chunking* into 256 tokens with a 30-token overlap. This suits small embedding models.
+- **Vectorization:** uses `sentence-transformers` with the `all-MiniLM-L6-v2` model running locally on CPU/GPU to create 384-dimension dense embeddings. It needs no network and has no per-token cost.
+- **Storage:** asynchronous connection through `asyncpg` to **PostgreSQL 16**. The vectors are stored in a `vector(384)` column provided by the `pgvector` extension.
 
-### 3. Recuperación Two-Stage (Retriever + Reranker)
-Este es el núcleo de calidad del sistema RAG, diseñado para solventar el problema del "Lost in the Middle" y la baja precisión semántica del dot-product simple:
+### 3. Two-stage retrieval (Retriever + Reranker)
+This is the quality core of the RAG system, designed to address the "Lost in the Middle" problem and the low semantic precision of a plain dot product:
 
-- **Etapa 1 - Retriever Vectorial (`src/services/retriever.py`):** 
-  Busca los Top-K (ej. 5) candidatos más similares en la base de datos utilizando la distancia/similitud Coseno nativa de `pgvector` (`1 - (embedding <=> query)`). Es muy rápido, pero propenso a recuperar documentos semánticamente "cercanos" pero incorrectos en contexto.
-- **Etapa 2 - Cross-Encoder Reranker (`src/services/reranker.py`):** 
-  Utiliza `flashrank` con el modelo `ms-marco-TinyBERT-L-2-v2`. A diferencia del retriever que compara dos vectores previamente calculados de manera aislada (Bi-Encoder), el Cross-Encoder procesa simultáneamente la [Pregunta + Documento] a través de las capas de atención del Transformer, deduciendo si el documento *realmente responde* la pregunta. Retorna los Top-N (ej. 3) definitivos.
+- **Stage 1 - Vector retriever (`src/services/retriever.py`):** 
+  Finds the Top-K (e.g. 5) most similar candidates in the database using `pgvector`'s native cosine distance/similarity (`1 - (embedding <=> query)`). It is very fast, but prone to retrieving documents that are semantically "close" yet wrong in context.
+- **Stage 2 - Cross-encoder reranker (`src/services/reranker.py`):** 
+  Uses `flashrank` with the `ms-marco-TinyBERT-L-2-v2` model. Unlike the retriever, which compares two vectors computed separately in advance (bi-encoder), the cross-encoder processes the [Question + Document] pair together through the Transformer's attention layers, working out whether the document *actually answers* the question. It returns the final Top-N (e.g. 3).
 
-### 4. Extracción / Generación Estructurada (`src/services/extractor.py`)
-- **Integración de Instructor:** Parchea el cliente asíncrono de `Anthropic` para forzar a Claude a escupir los resultados validando contra el esquema `StructuredAnswer` de Pydantic. Si Claude falla en el formato, `Instructor` realiza un *retry* inyectando el error de validación.
-- **Prompts Delimitados:** El contexto proveniente del re-ranker se inyecta de forma clara referenciando explícitamente los UUIDs de la base de datos para garantizar el linaje de los datos.
+### 4. Structured extraction / generation (`src/services/extractor.py`)
+- **Instructor integration:** patches the asynchronous `Anthropic` client to force Claude to output results validated against Pydantic's `StructuredAnswer` schema. If Claude gets the format wrong, `Instructor` *retries*, feeding back the validation error.
+- **Delimited prompts:** the context coming from the re-ranker is injected clearly, explicitly referencing the database UUIDs to guarantee data lineage.
 
-### 5. Observabilidad Transversal (Langfuse)
-Toda función principal está instrumentada con `@observe(name="...")`. Esto permite rastrear en la plataforma de Langfuse:
-- El árbol completo de ejecución (Trace) de una solicitud.
-- Latencias individuales del retriever vs reranker vs generación.
-- Los tokens enviados al generador.
+### 5. Cross-cutting observability (Langfuse)
+Every main function is instrumented with `@observe(name="...")`. This allows tracing, on the Langfuse platform:
+- The full execution tree (trace) of a request.
+- Individual latencies of the retriever vs. the reranker vs. generation.
+- The tokens sent to the generator.
 
-### 6. Sistema de Evaluación Automática (Evals)
-La calidad del pipeline se verifica mediante pruebas unitarias en `tests/test_rag.py` usando el framework **DeepEval** y **pytest**. Bajo un enfoque *LLM-as-a-judge*, se prueban dos métricas vitales para RAG en producción:
-- **Contextual Relevancy:** Evalúa de forma matemática si los documentos recuperados por el RRF y el Reranker realmente aportan contexto útil.
-- **Faithfulness:** Se encarga de penalizar severamente si el generador alucina cualquier dato que no exista estrictamente dentro de las fuentes recuperadas.
-
+### 6. Automatic evaluation system (evals)
+The quality of the pipeline is checked with tests in `tests/test_rag.py` using the **DeepEval** framework and **pytest**. With an *LLM-as-a-judge* approach, two metrics vital for production RAG are tested:
+- **Contextual Relevancy:** evaluates mathematically whether the documents retrieved by RRF and the reranker actually provide useful context.
+- **Faithfulness:** heavily penalizes the generator for hallucinating any data that does not strictly exist in the retrieved sources.

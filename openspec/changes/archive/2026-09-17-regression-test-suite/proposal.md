@@ -1,34 +1,34 @@
 ## Why
 
-El repositorio no tiene ningún test ejecutable (`BUG-07`). La única suite, `tests/test_rag.py`, falla con un `TypeError` antes de evaluar nada. Aunque se corrigiera, necesitaría un juez de OpenAI que no está configurado y preguntaría por un documento que no está en el corpus. Mientras tanto, la remediación de la auditoría ha cerrado más de veinte hallazgos, y cada corrección se verificó con un control negativo desde scripts efímeros que ya no existen: nada impide que esos defectos vuelvan. Esa red de regresión hace falta antes de seguir tocando el código (`HYG-05`, capas 2 y 3 de `SEC-07`, API con dobles).
+The repository has no runnable test (`BUG-07`). The only suite, `tests/test_rag.py`, fails with a `TypeError` before evaluating anything. Even if it were fixed, it would need an OpenAI judge that is not configured, and it would ask about a document that is not in the corpus. Meanwhile, the audit remediation has closed more than twenty findings, and each fix was verified with a negative control from throwaway scripts that no longer exist: nothing stops those defects from coming back. That regression net is needed before touching the code any further (`HYG-05`, layers 2 and 3 of `SEC-07`, API with doubles).
 
 ## What Changes
 
-- Nueva suite de regresión en `tests/`, organizada en dos capas:
-  - **Capa 1, lógica pura:** sin base de datos, sin LLM, sin `.env` y sin cargar modelos. Cubre la política de caché (`BUG-02`, `BUG-06`, `BUG-10`), la ventana de recuperación, el agotamiento y la ruta del revisor (`BUG-05`), el formateo del historial (`BUG-03`), el saneado del nombre de archivo (`SEC-04`), la firma del tenant (`SEC-05`) y los límites de las puntuaciones del evaluador (`DOC-02`).
-  - **Capa 2, Postgres real y desechable:** una base levantada por la propia suite desde volumen vacío. Cubre el aislamiento con contexto firmado (`SEC-05`), la consulta de GraphRAG ante un payload de inyección (`SEC-03`), que el tenant no sobreviva en el pool (`PERF-01`), los privilegios de `app_user` (`HYG-07`, `SEC-07`) y el arranque desde cero (`BUG-04`).
-- Se extraen funciones puras de módulos que, al importarse, cargan modelos o crean clientes. Se mueven sin cambiar su comportamiento, y los módulos originales las importan del nuevo sitio:
-  - la política de caché, desde `src/api/routers/chat.py`;
-  - `retrieval_window`, la decisión de agotamiento (hoy en línea en `researcher_node`) y `route_reviewer`, desde `src/services/agent_graph/`;
-  - el saneado del nombre de origen (hoy en línea en `ingest_endpoint`);
-  - el modelo `RAGEvaluation`, desde `src/services/evaluator.py`.
-- Configuración de pytest: recolección limitada a `tests/`, `pytest-asyncio` y marcadores para seleccionar capas. Sin Docker, la capa 2 **falla**, no se salta.
-- `pytest` y `pytest-asyncio` pasan a dependencias de desarrollo.
-- `tests/test_rag.py` no se arregla aquí: queda marcado como eval y excluido de la ejecución por defecto, hasta el cambio de evals.
-- La ficha de `BUG-07` en `docs/AUDITORIA_TECNICA.md` recibe su línea de estado, con la corrección de que el parche mínimo propuesto ya no aplica.
+- New regression suite in `tests/`, organized in two layers:
+  - **Layer 1, pure logic:** no database, no LLM, no `.env` and no model loading. It covers the cache policy (`BUG-02`, `BUG-06`, `BUG-10`), the retrieval window, exhaustion and the reviewer's route (`BUG-05`), history formatting (`BUG-03`), file name sanitizing (`SEC-04`), the tenant signature (`SEC-05`) and the evaluator's score bounds (`DOC-02`).
+  - **Layer 2, real and disposable Postgres:** a database started by the suite itself from an empty volume. It covers isolation with a signed context (`SEC-05`), the GraphRAG query against an injection payload (`SEC-03`), the tenant not surviving in the pool (`PERF-01`), `app_user`'s privileges (`HYG-07`, `SEC-07`) and bootstrapping from scratch (`BUG-04`).
+- Pure functions are extracted from modules that load models or create clients when imported. They move without changing behavior, and the original modules import them from the new place:
+  - the cache policy, from `src/api/routers/chat.py`;
+  - `retrieval_window`, the exhaustion decision (inline in `researcher_node` today) and `route_reviewer`, from `src/services/agent_graph/`;
+  - the origin name sanitizing (inline in `ingest_endpoint` today);
+  - the `RAGEvaluation` model, from `src/services/evaluator.py`.
+- pytest configuration: collection limited to `tests/`, `pytest-asyncio` and markers to select layers. Without Docker, layer 2 **fails**; it is not skipped.
+- `pytest` and `pytest-asyncio` move to development dependencies.
+- `tests/test_rag.py` is not fixed here: it is marked as an eval and excluded from the default run, until the evals change.
+- The `BUG-07` entry in `docs/TECHNICAL_AUDIT.md` gets its status line, with the correction that the minimal patch proposed no longer applies.
 
 ## Capabilities
 
 ### New Capabilities
-- `regression-test-suite`: qué debe demostrar la suite de regresión, cómo se ejecuta cada capa y qué garantías da sobre la base de datos de desarrollo y sobre el entorno.
+- `regression-test-suite`: what the regression suite must prove, how each layer runs and what guarantees it gives about the development database and the environment.
 
 ### Modified Capabilities
-_Ninguna: no hay specs previas y las extracciones no cambian el comportamiento observable de la aplicación._
+_None: there are no previous specs and the extractions do not change the application's observable behavior._
 
 ## Impact
 
-- **Código de producción (solo movimientos):** `src/api/routers/chat.py`, `src/api/routers/ingest.py`, `src/services/agent_graph/nodes.py`, `src/services/agent_graph/graph.py`, `src/services/evaluator.py`, más los módulos nuevos que reciben lo extraído.
-- **Tests y configuración:** `tests/` (suite nueva, `conftest.py`, fixtures) y `pyproject.toml` (configuración de pytest, grupo de desarrollo).
-- **Infraestructura de pruebas:** Docker pasa a ser requisito para la suite completa. La capa 2 usa un proyecto Compose propio, con su puerto y su volumen, que borra por nombre exacto al terminar. Nunca toca la base de desarrollo ni su volumen `ai_engineer_sandbox_pgdata`.
-- **Documentación:** `docs/AUDITORIA_TECNICA.md` (estado de `BUG-07`). El README no se toca aquí: su afirmación de *"Evals deterministas (DeepEval)"* corresponde al cambio de evals.
-- **Fuera de alcance:** la capa de API con dobles (`SEC-01`, `SEC-02` en el borde, `SEC-06`, `BUG-01`, `BUG-09`), que será el siguiente cambio; las evals de calidad con juez LLM; las mediciones de rendimiento y las verificaciones de Docker (`PERF-02` a `PERF-04`, `DOC-01`, `HYG-06`, `HYG-08`, `DOC-03`), que siguen siendo manuales; y los scripts sueltos de la raíz (`HYG-02`).
+- **Production code (moves only):** `src/api/routers/chat.py`, `src/api/routers/ingest.py`, `src/services/agent_graph/nodes.py`, `src/services/agent_graph/graph.py`, `src/services/evaluator.py`, plus the new modules that receive what is extracted.
+- **Tests and configuration:** `tests/` (new suite, `conftest.py`, fixtures) and `pyproject.toml` (pytest configuration, development group).
+- **Test infrastructure:** Docker becomes a requirement for the full suite. Layer 2 uses its own Compose project, with its own port and volume, which it deletes by exact name at the end. It never touches the development database or its `ai_engineer_sandbox_pgdata` volume.
+- **Documentation:** `docs/TECHNICAL_AUDIT.md` (status of `BUG-07`). The README is not touched here: its claim of *"deterministic evals (DeepEval)"* belongs to the evals change.
+- **Out of scope:** the API layer with doubles (`SEC-01`, `SEC-02` at the edge, `SEC-06`, `BUG-01`, `BUG-09`), which will be the next change; quality evals with an LLM judge; performance measurements and Docker checks (`PERF-02` to `PERF-04`, `DOC-01`, `HYG-06`, `HYG-08`, `DOC-03`), which remain manual; and the loose scripts in the root (`HYG-02`).

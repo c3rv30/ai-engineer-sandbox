@@ -1,29 +1,29 @@
 ## Why
 
-La suite de regresión (`regression-test-suite`) dejó fuera el borde HTTP. Cinco correcciones siguen sin ningún test que las proteja, entre ellas los dos hallazgos 🔴 de la auditoría: `SEC-01` (token firmado con otra clave), `SEC-02` (`tenant_id` malformado en el token), `SEC-06` (el texto de la excepción llegaba al cliente), `BUG-01` (el caché guardaba la respuesta contaminada con los mensajes de progreso) y `BUG-09` (`/chat/stream/` no devolvía respuesta para saludos, temas fuera de alcance ni herramientas). Hoy su única prueba vive en los mensajes de commit y en la auditoría, así que reintroducir cualquiera de ellas no rompe nada.
+The regression suite (`regression-test-suite`) left the HTTP edge out. Five fixes still have no test protecting them, among them the audit's two 🔴 findings: `SEC-01` (token signed with another key), `SEC-02` (malformed `tenant_id` in the token), `SEC-06` (the exception text reached the client), `BUG-01` (the cache stored the answer polluted with the progress messages) and `BUG-09` (`/chat/stream/` returned no answer for greetings, out-of-scope topics or tools). Today their only proof lives in commit messages and in the audit, so reintroducing any of them breaks nothing.
 
 ## What Changes
 
-- Tercera capa de la suite, `tests/api/`: la aplicación FastAPI completa con `TestClient`, y dobles en lugar del grafo y de los servicios de datos.
-  - **Autenticación real, sin dobles:** los 401 de `SEC-01` y `SEC-02` se comprueban con el `get_current_user` de verdad.
-  - **Dobles:** `agent_graph` (`ainvoke` y `astream`), `check_semantic_cache`, `save_semantic_cache`, `retrieve_user_facts`, `extract_and_save_facts` y `evaluate_rag_response`, sustituidos en el espacio de nombres de `src/api/routers/chat.py`. La capa no se conecta a Postgres ni llama a ningún LLM, y **no necesita Docker**.
-- Regresiones cubiertas: 401 ante token con otra clave, sin `sub` o sin `tenant_id`, y ante `tenant_id` malformado (`SEC-01`, `SEC-02`); la API no arranca sin `JWT_SECRET_KEY` o con una demasiado corta (`SEC-01`); mensaje genérico con identificador ante un fallo interno, en los tres puntos, y mensajes escritos para el cliente que se conservan (`SEC-06`); el objeto que se manda a persistir en caché va limpio, mientras el que recibe el cliente lleva el progreso (`BUG-01`); el stream devuelve respuesta para saludos, temas fuera de alcance y herramientas (`BUG-09`).
-- Marcador `api` y selección por directorio, como las otras capas. La capa entra en la ejecución por defecto de `uv run pytest`.
-- Control negativo por hallazgo, como en el cambio anterior: cada defecto se reintroduce, se comprueba que falla al menos un test y se restaura.
-- Estado de los cinco hallazgos en `docs/AUDITORIA_TECNICA.md`: todos están ya corregidos, así que lo que se anota es que pasan a tener regresión automática.
+- Third layer of the suite, `tests/api/`: the full FastAPI application with `TestClient`, and doubles instead of the graph and the data services.
+  - **Real authentication, no doubles:** the `SEC-01` and `SEC-02` 401s are checked with the real `get_current_user`.
+  - **Doubles:** `agent_graph` (`ainvoke` and `astream`), `check_semantic_cache`, `save_semantic_cache`, `retrieve_user_facts`, `extract_and_save_facts` and `evaluate_rag_response`, replaced in the namespace of `src/api/routers/chat.py`. The layer does not connect to Postgres or call any LLM, and **does not need Docker**.
+- Regressions covered: 401 for a token with another key, without `sub` or without `tenant_id`, and for a malformed `tenant_id` (`SEC-01`, `SEC-02`); the API does not start without `JWT_SECRET_KEY` or with one that is too short (`SEC-01`); a generic message with an identifier on an internal failure, at all three points, and messages written for the client that are kept (`SEC-06`); the object sent to be stored in the cache is clean, while the one the client gets carries the progress (`BUG-01`); the stream returns an answer for greetings, out-of-scope topics and tools (`BUG-09`).
+- `api` marker and selection by directory, like the other layers. The layer is part of the default `uv run pytest` run.
+- Negative control per finding, as in the previous change: each defect is reintroduced, at least one test is checked to fail and it is restored.
+- Status of the five findings in `docs/TECHNICAL_AUDIT.md`: all are already fixed, so what is noted is that they now have automatic regression tests.
 
 ## Capabilities
 
 ### New Capabilities
-_Ninguna._
+_None._
 
 ### Modified Capabilities
-- `regression-test-suite`: se añaden los requisitos de la capa de API (cómo se ejecuta y qué dobles usa) y los de las cinco regresiones del borde HTTP. Los requisitos existentes no cambian.
+- `regression-test-suite`: adds the API layer requirements (how it runs and which doubles it uses) and those of the five HTTP edge regressions. The existing requirements do not change.
 
 ## Impact
 
-- **Código de producción:** ninguno previsto. `agent_graph` y los servicios ya son nombres de módulo en `src/api/routers/chat.py`, así que se sustituyen desde el test. Si al implementarlo apareciera un punto que no se puede doblar sin tocar producción, se decide antes de cambiar nada.
-- **Tests y configuración:** `tests/api/` (nuevo, con su `conftest.py` y sus dobles) y `pyproject.toml` (marcador `api`).
-- **Tiempo de la suite:** la ejecución completa pasa de ~8 s a ~18 s, porque importar la aplicación carga el modelo de embeddings y el re-ranker (~10 s, una vez por ejecución). `uv run pytest tests/unit` sigue en ~0,3 s.
-- **Documentación:** `docs/AUDITORIA_TECNICA.md`.
-- **Fuera de alcance:** las evals de calidad y lo que declara el README sobre ellas; la ingesta de extremo a extremo (`SEC-04` ya tiene su test de capa 1); las mediciones de rendimiento y de Docker, que siguen siendo manuales; y la capa 2 de `SEC-07` (neutralizar `search_path` en la aplicación), que es una decisión aparte.
+- **Production code:** none planned. `agent_graph` and the services are already module names in `src/api/routers/chat.py`, so they are replaced from the test. If, while implementing it, a point showed up that cannot be doubled without touching production, it is decided before changing anything.
+- **Tests and configuration:** `tests/api/` (new, with its `conftest.py` and its doubles) and `pyproject.toml` (`api` marker).
+- **Suite time:** the full run goes from ~8 s to ~18 s, because importing the application loads the embedding model and the re-ranker (~10 s, once per run). `uv run pytest tests/unit` stays at ~0.3 s.
+- **Documentation:** `docs/TECHNICAL_AUDIT.md`.
+- **Out of scope:** the quality evals and what the README says about them; end-to-end ingestion (`SEC-04` already has its layer 1 test); the performance and Docker measurements, which remain manual; and layer 2 of `SEC-07` (neutralizing `search_path` in the application), which is a separate decision.
