@@ -4,3 +4,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+
+# Local tooling and scratch files
+.idea/
+.deepeval/
+.claude/
+*.log
+scratch_*.py
+/test_*.py
