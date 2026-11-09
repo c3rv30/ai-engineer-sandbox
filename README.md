@@ -7,6 +7,7 @@ A multi-agent RAG system built with **LangGraph**, **FastAPI** and **PostgreSQL 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791.svg)
 ![LangGraph](https://img.shields.io/badge/LangGraph-agent%20orchestration-orange.svg)
 ![Claude](https://img.shields.io/badge/LLM-Claude%20Haiku%204.5-purple.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 It was developed against the author's own résumé, and the supervisor prompt is written for that: questions like *"What did Bryan build at Betterfly?"* followed by *"and in which years?"*. Any Markdown, text, PDF or image file can be ingested.
 
@@ -170,6 +171,10 @@ tests/                   unit, api, db and evals layers
 ## Further reading
 
 - [Technical audit](docs/AUDITORIA_TECNICA.md) (Spanish): every finding found while checking the docs against the code, with its fix and how it was verified.
+
+## License
+
+[MIT](LICENSE)
 
 ---
 
