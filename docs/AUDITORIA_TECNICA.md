@@ -18,7 +18,7 @@ Se auditó la totalidad del repositorio:
 
 **Método.** Cada afirmación de la documentación se contrastó contra el código que la implementa. Cada hallazgo incluye: ubicación exacta (`archivo:línea`), el extracto literal del código, un comando de verificación reproducible y un parche propuesto. No se ejecutó el sistema —no se levantó Postgres ni se consumió la API de Anthropic—; toda la evidencia es estática y verificable con `grep`, `cat` y lectura de fuente.
 
-**Relación con la documentación existente.** [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) es un post-mortem de seis problemas ya resueltos. [`ROADMAP_FASE_5_ESCALABILIDAD.md`](ROADMAP_FASE_5_ESCALABILIDAD.md) planifica cinco epics futuros. `PAPER_PLAN.md` §5 lista seis limitaciones conocidas y asumidas. **Este documento cubre el hueco entre los tres**: lo que está roto o divergente *ahora*, no resuelto y no planificado.
+**Relación con la documentación existente.** [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) es un post-mortem de seis problemas ya resueltos. [`ROADMAP_FASE_5_ESCALABILIDAD.md`](history/ROADMAP_FASE_5_ESCALABILIDAD.md) planifica cinco epics futuros. `PAPER_PLAN.md` §5 lista seis limitaciones conocidas y asumidas. **Este documento cubre el hueco entre los tres**: lo que está roto o divergente *ahora*, no resuelto y no planificado.
 
 ## Valoración general
 
@@ -1594,7 +1594,7 @@ Es un estado **permanente**: no se recupera reintentando, reiniciando ni reinsta
 | Contenedor con `/tmp` en tmpfs | El árbol completo | ⚠️ Re-descarga en cada arranque: dependencia de red en el boot y cold start lento |
 | CI / runner efímero | El árbol completo | ⚠️ Descarga en cada ejecución del pipeline |
 
-Ninguna de las tres columnas es aceptable para el epic 1 del [`ROADMAP_FASE_5_ESCALABILIDAD.md`](ROADMAP_FASE_5_ESCALABILIDAD.md): una imagen que descarga su modelo de inferencia desde internet en cada arranque no es desplegable en *serverless* (Cloud Run, ECS), donde los arranques en frío son frecuentes y la salida a internet puede estar restringida.
+Ninguna de las tres columnas es aceptable para el epic 1 del [`ROADMAP_FASE_5_ESCALABILIDAD.md`](history/ROADMAP_FASE_5_ESCALABILIDAD.md): una imagen que descarga su modelo de inferencia desde internet en cada arranque no es desplegable en *serverless* (Cloud Run, ECS), donde los arranques en frío son frecuentes y la salida a internet puede estar restringida.
 
 **Atenuante.** El valor no es arbitrario: `default_cache_dir = "/tmp"` en `flashrank/Config.py:6` es el propio default de la librería. El proyecto heredó una mala convención upstream, no la inventó. Pero como pasa `cache_dir` explícitamente, cambiarlo cuesta lo mismo que dejarlo.
 

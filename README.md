@@ -1,130 +1,176 @@
-# 🚀 AI Engineer Sandbox: Enterprise Multi-Agent System
+# AI Engineer Sandbox
 
-![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-green.svg)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20PgVector-336791.svg)
-![LangGraph](https://img.shields.io/badge/LangGraph-Agentic%20Orchestration-orange.svg)
-![Anthropic](https://img.shields.io/badge/LLM-Claude%20Haiku-purple.svg)
+A multi-agent RAG system built with **LangGraph**, **FastAPI** and **PostgreSQL + pgvector**: it answers questions over a document corpus, retries its own retrieval when the context falls short, isolates tenants at the database level and grades every answer with an LLM judge.
 
-Un motor avanzado de **Inteligencia Artificial y Sistemas RAG (Retrieval-Augmented Generation)** construido con estándares Enterprise. Este repositorio es un _showcase_ arquitectónico que demuestra la evolución desde un pipeline lineal simple de preguntas y respuestas, hasta un **Ecosistema Multi-Agente Autónomo** completamente orquestado con LangGraph.
+![Python](https://img.shields.io/badge/Python-3.14-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-green.svg)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791.svg)
+![LangGraph](https://img.shields.io/badge/LangGraph-agent%20orchestration-orange.svg)
+![Claude](https://img.shields.io/badge/LLM-Claude%20Haiku%204.5-purple.svg)
 
-Este proyecto aplica principios estrictos de **Clean Architecture**, asincronismo y validación determinista, garantizando un código de grado de producción escalable, seguro (Multi-Tenant) y con un alto nivel de observabilidad.
+It was developed against the author's own résumé, and the supervisor prompt is written for that: questions like *"What did Bryan build at Betterfly?"* followed by *"and in which years?"*. Any Markdown, text, PDF or image file can be ingested.
+
+> Code comments and the internal technical audit are written in Spanish.
 
 ---
 
-## 🧠 Arquitectura y Flujo Multi-Agente
-
-En lugar de un router monolítico, la lógica de razonamiento está distribuida en un `StateGraph` cíclico con roles especializados:
+## Architecture
 
 ```mermaid
 graph TD
-    User([👤 Usuario]) -->|Query| Supervisor[🤖 Nodo Supervisor]
-    
-    Supervisor -->|Evalúa Intent & HyDE| Router{¿Requiere Búsqueda?}
-    Router -->|No (Charla, Herramientas)| END([Fin])
-    Router -->|Sí| Researcher[🔍 Nodo Investigador]
-    
-    Researcher -->|Vector Search + GraphRAG| Reranker(⚡ FlashRank Re-ranker)
-    Reranker --> Generator[✍️ Nodo Redactor]
-    
-    Generator -->|Analiza Completitud| Evaluator{¿Falta Información?}
-    Evaluator -->|Sí (Falta Contexto)| Researcher
-    Evaluator -->|No (Respuesta Lista)| FinalAnswer[💬 Respuesta al Usuario]
-    FinalAnswer --> Background[⚙️ Tareas Background]
-    
-    Background --> LTM(🧠 Extraer Memoria a Largo Plazo)
-    Background --> RAGEval(📊 RAG Evaluator / LLM-as-a-judge)
-    Background --> Cache(💾 Guardar Caché Semántico)
+    U([User]) -->|JWT| API[FastAPI]
+    API --> C{Semantic cache hit?}
+    C -->|yes| R([Cached answer])
+    C -->|no| S[Supervisor<br/>intent + query rewriting]
+    S -->|greeting / out of scope / tool| E([Direct answer])
+    S -->|knowledge search| I[Researcher<br/>hybrid search + re-ranking + GraphRAG]
+    I --> G[Generator<br/>structured answer, streamed]
+    G -->|needs more context<br/>and a wider search can help| I
+    G -->|done| A([Answer via SSE])
+    A -.-> B1[Background: LLM-as-a-judge]
+    A -.-> B2[Background: long-term memory]
+    A -.-> B3[Semantic cache write]
 ```
 
+A request goes through these steps:
+
+1. **Auth.** A JWT carries the tenant ID, validated as a UUID at the edge.
+2. **Semantic cache.** A near-identical question from the same tenant (cosine similarity ≥ 0.85) returns the stored answer without calling the LLM.
+3. **Long-term memory.** The three most relevant facts remembered about the user are added to the context.
+4. **Agent graph.** A LangGraph `StateGraph` with three nodes:
+   - **Supervisor** classifies the intent with Claude and a Pydantic schema. Greetings, out-of-scope questions and tool calls end here. Knowledge questions get three rewrites (multi-query) and a hypothetical answer (HyDE).
+   - **Researcher** runs hybrid search for every query variant in parallel, deduplicates, re-ranks against the original question and prepends a GraphRAG subgraph when one matches.
+   - **Generator** writes a structured answer with cited sources and streams it. It also flags `requires_more_info` when the context was not enough.
+5. **Self-correction loop.** If the generator flags missing context, the graph sends the question back to the researcher with a wider retrieval window. It does so at most once, and not at all when a wider search cannot return anything new.
+6. **Background tasks.** An LLM judge scores the answer, new facts about the user are stored, and good answers are cached.
+
+## Key design decisions
+
+**Hybrid retrieval with Reciprocal Rank Fusion.** One SQL query runs a pgvector HNSW search and a Spanish full-text search (`tsvector` + `ts_rank`) and fuses them with RRF (k = 60). Small embedding models miss acronyms and proper nouns that full-text catches. RRF uses ranks, not scores, so it combines cosine distance and `ts_rank` without calibrating them.
+
+**Two-stage retrieval.** A local cross-encoder (`ms-marco-MiniLM-L-12-v2` via FlashRank) re-ranks the fused candidates. Embeddings (`all-MiniLM-L6-v2`, 384 dimensions) and the re-ranker run on CPU: no per-query cost and no documents sent to third parties.
+
+**Bounded self-correction.** The retry widens the search (by default from 15 to 30 candidates per query variant, and from 10 to 15 documents after re-ranking) instead of repeating it. The loop stops when the corpus has no more candidates or the window has hit its cap, because a retry there would cost tokens without changing the context.
+
+**Structured output, streamed.** Every LLM call returns a Pydantic model through Instructor, which retries with the validation error when the model's output does not fit. The generator streams `Partial[StructuredAnswer]` through LangGraph's `custom` stream channel. If the stream fails or ends before the schema is complete, it falls back to a non-streaming call.
+
+**Tenant isolation in the database, not in the application.** No query filters by tenant by hand. PostgreSQL Row-Level Security does it on all five tables, with `FORCE ROW LEVEL SECURITY` and a least-privilege application role.
+
+- The tenant is set per transaction with `set_config(..., true)`, so a pooled connection never leaks the previous user's tenant.
+- The tenant travels with an HMAC-SHA256 signature. A `SECURITY DEFINER` function checks it against a key the application role cannot read, so even an injected SQL statement cannot switch tenants.
+
+**Cache policy.** Only confident answers (≥ 0.5, no missing context) to knowledge questions or greetings are cached. Requests with conversation history skip the cache: a follow-up like "and in which years?" means different things in different conversations.
+
+**Online evaluation.** After each answer, a background task asks an LLM judge for faithfulness, answer relevance and context precision (0 to 1) and stores the scores, also under RLS.
+
+## Tech stack
+
+| Layer | Tools |
+| --- | --- |
+| API | FastAPI (async), Server-Sent Events, PyJWT |
+| Agents | LangGraph, LangChain Core |
+| LLM | Anthropic Claude Haiku 4.5, Instructor, Pydantic v2 |
+| Retrieval | PostgreSQL 16, pgvector (HNSW), full-text search, asyncpg |
+| Local models | sentence-transformers `all-MiniLM-L6-v2`, FlashRank cross-encoder |
+| Ingestion | Semantic chunking, PyMuPDF for PDFs, Claude for image descriptions |
+| Observability | Langfuse (optional) |
+| UI | Streamlit |
+| Tooling | uv, pytest, Docker Compose |
+
+## Getting started
+
+**Prerequisites:** Python 3.14, [uv](https://docs.astral.sh/uv/), Docker and an Anthropic API key.
+
+```bash
+# 1. Install dependencies
+uv sync
+
+# 2. Configure secrets (before starting the database)
+cp .env.example .env
+openssl rand -hex 32   # paste into TENANT_SIGNING_KEY
+openssl rand -hex 32   # paste into JWT_SECRET_KEY
+# then set ANTHROPIC_API_KEY, and DATABASE_URL with the app_user role
+
+# 3. Start PostgreSQL with pgvector (schema, roles and RLS are created on first start)
+docker compose up -d
+
+# 4. Ingest a document
+PYTHONPATH=. uv run python src/services/ingestion.py path/to/document.md
+
+# 5. Run the API and the UI
+PYTHONPATH=. uv run uvicorn src.api.main:app --port 8000 --reload
+PYTHONPATH=. uv run streamlit run src/frontend/app.py
+```
+
+Docker Compose reads `TENANT_SIGNING_KEY` from `.env` and refuses to start without it. Keep `DATABASE_URL` on `app_user`: a superuser bypasses Row-Level Security.
+
+The demo has two users, `bryan` and `empresa_x` (password `password123`), each in its own tenant.
+
+## API
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/auth/token` | Log in and get a JWT |
+| `POST` | `/chat/` | Ask a question; returns the full structured answer |
+| `POST` | `/chat/stream/` | Ask a question; streams progress and the answer over SSE |
+| `POST` | `/ingest/` | Upload a `.md`, `.txt`, `.pdf`, `.png` or `.jpg` file into your tenant |
+| `GET` | `/health` | Health check |
+
+## Testing
+
+The suite has four layers:
+
+| Layer | What it checks | Needs |
+| --- | --- | --- |
+| `tests/unit` | Routing, retry window, cache policy, tenant signature, layer purity | Nothing |
+| `tests/api` | Endpoints with test doubles for the graph and services | Nothing |
+| `tests/db` | Tenant isolation, role privileges and bootstrap against a disposable PostgreSQL | Docker |
+| `tests/evals` | Answer quality with an LLM judge (DeepEval); being updated to the current pipeline | API keys, `--run-evals` |
+
+```bash
+uv run pytest -m "not db"   # unit + API, no Docker
+uv run pytest               # also the database layer
+```
+
+## Project structure
+
+```text
+src/
+├── api/                 FastAPI app, auth, chat and ingest routers
+├── services/
+│   ├── agent_graph/     LangGraph state, nodes, routing and graph
+│   ├── retriever.py     hybrid search with RRF
+│   ├── reranker.py      cross-encoder re-ranking
+│   ├── router.py        supervisor: intent, multi-query, HyDE
+│   ├── extractor.py     structured (and streamed) answer generation
+│   ├── db.py            connection pool and signed tenant context
+│   ├── cache.py, memory.py, graphrag.py, evaluator.py
+│   └── ingestion.py     semantic chunking and multimodal ingestion
+├── models/              Pydantic schemas
+└── frontend/app.py      Streamlit UI
+sql/                     schema, roles, RLS policies and migrations
+tests/                   unit, api, db and evals layers
+```
+
+## Known limitations
+
+- **Runs locally.** There is no cloud deployment yet.
+- **Demo authentication.** Users live in code with plain-text passwords. The project demonstrates data isolation, not identity management.
+- **No fixed evaluation set.** The online judge scores every answer, but there is no golden set of questions and expected answers to compare versions. The judge is the same model family that generates the answers.
+- **Basic GraphRAG.** Subgraphs are retrieved by keyword match on entity names, without multi-hop traversal.
+- **Filtered HNSW.** Row-Level Security filters after the index scan, so a tenant with few nearby documents can get fewer than *k* results.
+- **SSE payloads.** Each event carries the accumulated answer, not just the new text.
+
+## Roadmap
+
+- Deploy on AWS (ECS Fargate + RDS) with infrastructure as code.
+- A golden evaluation set wired into the offline evals.
+- CI with lint and the unit and API test layers.
+
+## Further reading
+
+- [Technical audit](docs/AUDITORIA_TECNICA.md) (Spanish): every finding found while checking the docs against the code, with its fix and how it was verified.
+
 ---
 
-## 🌟 Características Principales (SOTA)
-
-### 1. 🤖 Orquestación Agentic (LangGraph)
-*   **Routing Inteligente:** El flujo es gestionado por Nodos (Supervisor, Investigador, Revisor) que se comunican escribiendo en un Estado Global (`AgentState`).
-*   **Ciclos de Razonamiento:** Si el Agente Redactor detecta que el contexto recuperado es insuficiente, devuelve el control al Investigador, que repite la búsqueda con una ventana más amplia: más candidatos por variante de la consulta y más documentos tras el re-ranking. Si ampliarla no puede aportar nada nuevo, el ciclo termina.
-*   **Herramientas Externas (Function Calling):** El supervisor puede desviar la consulta para invocar APIs externas de forma determinista.
-
-### 2. 🔍 RAG Avanzado y Recuperación Multidimensional
-*   **Semantic Chunking:** En lugar de dividir el texto arbitrariamente por cantidad de tokens, se utilizan algoritmos matemáticos (similitud coseno iterativa) para cortar los chunks respetando cambios radicales de tema.
-*   **Two-Stage Retrieval (RRF + Cross-Encoder):** 
-    1. *Retrieval Híbrido:* Fusión de Búsqueda Vectorial (`pgvector`) y Full-Text Search (BM25).
-    2. *Reranking:* Re-ordenamiento ultra-rápido en CPU usando un modelo Cross-Encoder local (`FlashRank` / `ms-marco`).
-*   **GraphRAG (Grafos de Conocimiento):** Extracción dinámica de entidades y relaciones (NetworkX) guardadas en Postgres. Al consultar, se recuperan sub-grafos para entender el panorama general.
-*   **HyDE & Multi-Query:** Transformación de la consulta original por parte del Supervisor para mitigar la ambigüedad antes de tocar la base de datos.
-
-### 3. 🛡️ Seguridad, Rendimiento y Producción
-*   **Streaming SSE + Pydantic v2:** Generación estructurada de respuestas parciales en tiempo real a través de Server-Sent Events usando la librería `Instructor`. El redactor emite el texto según lo genera por el canal `custom` de LangGraph, intercalado con el progreso de cada nodo del grafo. Garantiza JSON determinista sin alucinaciones de sintaxis.
-*   **Multi-Tenancy por Base de Datos (RLS):** Autenticación mediante JWT. Total aislamiento de datos de clientes aplicando Políticas de Seguridad a Nivel de Fila (Row-Level Security) nativas en PostgreSQL.
-*   **Caché Semántico:** Interceptación de preguntas repetidas. Si el *cos_distance* de la pregunta actual vs el historial es menor a 0.15, devuelve la respuesta cacheada sin consumir tokens de LLM (0% de latencia y costo).
-
-### 4. 📊 Observabilidad Activa (LLM-as-a-judge)
-*   Integración pasiva (Fire-and-forget Background Tasks) de un modelo de evaluación.
-*   Cada respuesta generada es evaluada asíncronamente en 3 dimensiones: **Faithfulness** (Fidelidad/Alucinaciones), **Answer Relevance** y **Context Precision**. Todo queda persistido en BD.
-*   Trazabilidad de inferencias en vivo usando **Langfuse** (`@observe`).
-
----
-
-## 🛠️ Stack Tecnológico
-
-*   **Backend Framework:** `FastAPI` (Python 3.12+, asíncrono puro).
-*   **Agent Framework:** `LangGraph` + `LangChain Core`.
-*   **LLM & Structured Outputs:** `Anthropic Claude 3.5 Haiku` + `Instructor` + `Pydantic v2`.
-*   **Base de Datos y Vectores:** `PostgreSQL 16` + extensión `pgvector` + `asyncpg`.
-*   **Embeddings & Reranker:** Modelos locales ultraligeros `sentence-transformers/all-MiniLM-L6-v2` y `FlashRank`.
-*   **Frontend Interactivo:** `Streamlit` (para consumo de endpoints asíncronos en tiempo real).
-*   **Gestor de Paquetes:** `uv`.
-
----
-
-## 🚀 Cómo Ejecutar el Entorno Local
-
-1. **Instalar el gestor ultrarrápido uv:**
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   uv sync
-   ```
-
-2. **Configurar las Credenciales** (antes de levantar la base de datos):
-   ```bash
-   cp .env.example .env
-   openssl rand -hex 32   # pégala en TENANT_SIGNING_KEY
-   openssl rand -hex 32   # pégala en JWT_SECRET_KEY
-   ```
-   Abre `.env` y rellena las tres entradas obligatorias: `ANTHROPIC_API_KEY` y las dos claves generadas. Tiene que ser antes del paso 3, porque `docker compose` lee `TENANT_SIGNING_KEY` de `.env` y no arranca sin ella. Deja `DATABASE_URL` con `app_user`: un superusuario se salta el aislamiento entre tenants.
-
-3. **Levantar PostgreSQL con soporte PgVector:**
-   ```bash
-   docker compose up -d
-   ```
-
-4. **Arrancar el Backend y Frontend simultáneamente:**
-   ```bash
-   # Terminal 1: Inicia la API asíncrona
-   PYTHONPATH=. uv run uvicorn src.api.main:app --port 8000 --reload
-   
-   # Terminal 2: Inicia la Interfaz Visual
-   PYTHONPATH=. uv run streamlit run src/frontend/app.py
-   ```
-*(Opcional) Ingestar un documento base: `PYTHONPATH=. uv run python src/services/ingestion.py CONTEXT.md`*
-
----
-
-## 📜 Histórico de Construcción (Roadmap)
-
-Este Sandbox fue construido siguiendo una progresión meticulosa de 4 Fases para validar cada paradigma de la Ingeniería de IA:
-1. **Fase 1 (Fundación):** RAG Básico en consola, Pydantic, PostgreSQL y Evals deterministas (DeepEval).
-2. **Fase 2 (Evolución a Producto):** Clean Architecture, API REST (FastAPI), y parsing OCR multimodal con PyMuPDF.
-3. **Fase 3 (SOTA Enterprise):** Autenticación Multi-Tenant (RLS), GraphRAG local, Streaming parcial (SSE) e inyección de Herramientas.
-4. **Fase 4 (AI Systems Engineering):** Sistema Multi-Agente (LangGraph), Memoria Infinita a Largo Plazo, Semantic Chunking estadístico y Evaluaciones Asíncronas (LLM-as-a-judge).
-
----
-
-> **Diseñado y desarrollado por Bryan.**
-> *Demostrando experiencia comprobable en Arquitecturas Cloud y AI Engineering.*
-
----
-
-## 🚀 Próximos Pasos (Fase 5)
-Para consultar los planes futuros de escalabilidad (Dockerización, Dashboards, Limpieza de Caché, GraphRAG Avanzado), consulta el documento: [Roadmap Fase 5](docs/ROADMAP_FASE_5_ESCALABILIDAD.md).
+Built by **Bryan Bobadilla** · [bbobadilla.dev](https://bbobadilla.dev) · [LinkedIn](https://www.linkedin.com/in/bbobadillapisero)
