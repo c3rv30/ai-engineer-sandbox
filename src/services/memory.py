@@ -14,20 +14,20 @@ client = instructor.from_anthropic(AsyncAnthropic(api_key=os.getenv("ANTHROPIC_A
 
 class ExtractedFacts(BaseModel):
     new_facts: list[str] = Field(
-        description="Lista de nuevos hechos, preferencias o información personal persistente sobre el usuario (máx. 3). Vacío si no hay nueva información relevante a largo plazo.",
+        description="List of new facts, preferences or persistent personal information about the user (max. 3). Empty if there is no new long-term information.",
         default_factory=list
     )
 
 async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
     """
-    Se ejecuta en background. Analiza si el usuario reveló nueva información sobre sí mismo.
-    Si es así, la vectoriza y la guarda.
+    Runs in the background. Checks whether the user revealed new information about
+    themselves. If so, it embeds it and stores it.
     """
     prompt = f"""
-    Eres un extractor de memoria a largo plazo. Analiza el siguiente mensaje del usuario y determina si reveló algún hecho importante sobre sí mismo, sus preferencias, su stack tecnológico o su empresa.
-    Solo extrae hechos que sean útiles para recordar en futuras sesiones. Escríbelos en tercera persona de forma concisa. (ej. "El usuario prefiere programar en Python", "El usuario trabaja en la empresa X").
+    You are a long-term memory extractor. Analyze the following user message and decide whether it revealed any important fact about the user, their preferences, their tech stack or their company.
+    Only extract facts that are useful to remember in future sessions. Write them concisely, in the third person and in the same language as the message (e.g. "The user prefers programming in Python", "The user works at company X").
     
-    Mensaje del usuario: "{user_message}"
+    User message: "{user_message}"
     """
     
     try:
@@ -41,10 +41,10 @@ async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
         if not extraction.new_facts:
             return
             
-        print(f"🧠 [Memory] Nuevos hechos detectados: {extraction.new_facts}")
+        print(f"🧠 [Memory] New facts detected: {extraction.new_facts}")
         
-        # Los embeddings se calculan antes de tomar conexión: es trabajo de CPU y
-        # retendría una conexión del pool sin usarla.
+        # The embeddings are computed before taking a connection: it is CPU work and
+        # would hold a pooled connection without using it.
         embeddings = [await embed(fact) for fact in extraction.new_facts]
         async with tenant_connection(tenant_id) as conn:
             
@@ -57,14 +57,14 @@ async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
                 """
                 await conn.execute(sql, tenant_id, fact, emb_str)
     except Exception as e:
-        print(f"Error extrayendo memoria: {e}")
+        print(f"Error extracting memory: {e}")
 
 async def retrieve_user_facts(tenant_id: uuid.UUID, query: str, top_k: int = 3) -> str:
     """
-    Busca los hechos más relevantes del usuario basados en su pregunta actual.
+    Finds the user's most relevant facts for their current question.
     """
-    # El embedding se calcula antes de tomar conexión: es trabajo de CPU y retendría
-    # una conexión del pool sin usarla.
+    # The embedding is computed before taking a connection: it is CPU work and would
+    # hold a pooled connection without using it.
     emb_str = to_pgvector(await embed(query))
     async with tenant_connection(tenant_id) as conn:
         
@@ -80,11 +80,11 @@ async def retrieve_user_facts(tenant_id: uuid.UUID, query: str, top_k: int = 3) 
         if not rows:
             return ""
             
-        # Filtramos hechos con una similitud mínima para no traer basura
+        # Filter facts by a minimum similarity so no noise comes back
         relevant_facts = [row['fact'] for row in rows if row['similarity'] > 0.3]
         
         if not relevant_facts:
             return ""
             
         facts_str = "\n".join(f"- {f}" for f in relevant_facts)
-        return f"<USER_PROFILE>\nInformación histórica conocida sobre el usuario:\n{facts_str}\n</USER_PROFILE>\n\n"
+        return f"<USER_PROFILE>\nKnown information about the user from previous sessions:\n{facts_str}\n</USER_PROFILE>\n\n"

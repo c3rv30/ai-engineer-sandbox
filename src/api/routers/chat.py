@@ -20,19 +20,19 @@ from src.services.agent_graph.state import AgentState
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
-# El texto de una excepción interna no se le devuelve al cliente (SEC-06): traía rutas
-# del servidor y mensajes del SDK de Anthropic. Va al log, y al cliente solo un
-# identificador con el que correlacionarlo.
+# The text of an internal exception is not returned to the client (SEC-06): it carried
+# server paths and Anthropic SDK messages. It goes to the log, and the client only gets
+# an identifier to correlate it with.
 logger = logging.getLogger(__name__)
 
 
-# Instanciamos el grafo una vez (es thread-safe)
+# The graph is built once (it is thread-safe)
 agent_graph = build_graph()
 
 @router.post("/", response_model=StructuredAnswer)
 async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     try:
-        # 1. Caché Semántico
+        # 1. Semantic cache
         use_cache = is_cache_eligible(request)
         cached_data = await check_semantic_cache(current_user.tenant_id, request.query) if use_cache else None
         if cached_data:
@@ -41,7 +41,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
         # 2. Long-Term Memory
         user_profile = await retrieve_user_facts(current_user.tenant_id, request.query)
 
-        # 3. Inicializar Estado del Grafo
+        # 3. Initialize the graph state
         initial_state = AgentState(
             messages=[],
             tenant_id=current_user.tenant_id,
@@ -58,41 +58,41 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
             needs_more_info=False
         )
 
-        # 4. Ejecutar el Grafo
+        # 4. Run the graph
         final_state = await agent_graph.ainvoke(initial_state)
 
         structured_response = final_state.get("final_answer")
         if not structured_response:
-            raise HTTPException(status_code=500, detail="El Grafo de Agentes no devolvió una respuesta final.")
+            raise HTTPException(status_code=500, detail="The agent graph did not return a final answer.")
 
-        # 5. Tareas post-respuesta
+        # 5. Post-response tasks
         response_dict = structured_response.model_dump()
         if use_cache and is_cacheable(final_state.get("intent_type"), response_dict):
             await save_semantic_cache(current_user.tenant_id, request.query, response_dict)
         background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
 
-        # Evaluación RAG en Background
+        # RAG evaluation in the background
         if final_state.get("documents"):
             background_tasks.add_task(evaluate_rag_response, current_user.tenant_id, request.query, structured_response.answer, final_state["documents"])
 
         return structured_response
 
     except HTTPException:
-        # El 500 de "el grafo no devolvió una respuesta final" lo levanta este mismo
-        # bloque y ya trae un mensaje pensado para el cliente. Sin este caso, el
-        # except genérico lo reenvolvería y perdería ese detalle.
+        # The "the graph did not return a final answer" 500 is raised by this same block
+        # and already carries a message meant for the client. Without this case, the
+        # generic except would rewrap it and lose that detail.
         raise
     except Exception:
         error_id = uuid.uuid4().hex[:8]
-        logger.exception("Fallo en POST /chat/ [%s]", error_id)
-        raise HTTPException(status_code=500, detail=f"Error interno ({error_id})")
+        logger.exception("POST /chat/ failed [%s]", error_id)
+        raise HTTPException(status_code=500, detail=f"Internal error ({error_id})")
 
 
 @router.post("/stream/")
 async def chat_stream_endpoint(request: ChatRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     """
-    Endpoint de Streaming usando LangGraph.
-    Emitimos eventos de progreso y finalmente la respuesta estructurada.
+    Streaming endpoint using LangGraph.
+    Emits progress events and finally the structured answer.
     """
     async def sse_generator():
         try:
@@ -121,9 +121,9 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                 needs_more_info=False
             )
 
-            # Dos canales a la vez: 'custom' trae el texto del redactor según se
-            # genera (lo escribe generator_node con get_stream_writer) y 'updates'
-            # trae el progreso por nodo y el estado final.
+            # Two channels at once: 'custom' carries the generator's text as it is
+            # produced (generator_node writes it with get_stream_writer) and 'updates'
+            # carries per-node progress and the final state.
             final_dict = None
             intent_type = None
             accumulated_answer = ""
@@ -138,28 +138,28 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                     if state_update and state_update.get("intent_type"):
                         intent_type = state_update["intent_type"]
                     if node_name == "supervisor":
-                        accumulated_answer += "🤖 *Supervisor evaluando estrategia...*\n\n"
+                        accumulated_answer += "🤖 *Supervisor choosing a strategy...*\n\n"
                         yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
                     elif node_name == "researcher":
                         if "documents" in state_update:
                             retrieved_docs = state_update["documents"]
-                        accumulated_answer += "🔍 *Investigador buscando en Postgres Vector y GraphRAG...*\n\n"
+                        accumulated_answer += "🔍 *Researcher searching pgvector and GraphRAG...*\n\n"
                         yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
 
                     if state_update and state_update.get("final_answer"):
-                        # Objeto limpio: es el que se persiste en caché y el que
-                        # se envía al juez del evaluador. No debe llevar los
-                        # mensajes de progreso, que son artefactos de la UI.
+                        # Clean object: it is the one stored in the cache and the one
+                        # sent to the evaluator's judge. It must not carry the
+                        # progress messages, which are UI artifacts.
                         final_dict = state_update["final_answer"].model_dump()
-                        # El redactor ya emitió su texto por el canal 'custom'. El
-                        # supervisor no: resuelve saludos, temas fuera de alcance y
-                        # herramientas él mismo y el grafo termina ahí, así que su
-                        # respuesta hay que añadirla o el cliente se queda con la
-                        # línea de progreso y nada más.
+                        # The generator already emitted its text on the 'custom' channel.
+                        # The supervisor did not: it handles greetings, out-of-scope
+                        # topics and tools itself and the graph ends there, so its
+                        # answer has to be appended or the client is left with the
+                        # progress line and nothing else.
                         if node_name != "generator":
                             accumulated_answer += final_dict.get("answer") or ""
-                        # Objeto para el stream: prolonga el texto ya emitido,
-                        # porque el frontend renderiza diffs de caracteres.
+                        # Object for the stream: it extends the text already emitted,
+                        # because the frontend renders character diffs.
                         stream_dict = {**final_dict, "answer": accumulated_answer}
                         yield f"data: {json.dumps(stream_dict)}\n\n"
 
@@ -171,9 +171,9 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                 background_tasks.add_task(evaluate_rag_response, current_user.tenant_id, request.query, final_dict.get("answer", ""), retrieved_docs)
 
         except Exception:
-            # La clave 'error' se mantiene: es la que renderiza el frontend.
+            # The 'error' key is kept: it is the one the frontend renders.
             error_id = uuid.uuid4().hex[:8]
-            logger.exception("Fallo en POST /chat/stream/ [%s]", error_id)
-            yield f"data: {json.dumps({'error': f'Error interno ({error_id})'})}\n\n"
+            logger.exception("POST /chat/stream/ failed [%s]", error_id)
+            yield f"data: {json.dumps({'error': f'Internal error ({error_id})'})}\n\n"
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")

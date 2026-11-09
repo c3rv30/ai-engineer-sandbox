@@ -1,8 +1,8 @@
-"""Regresión del ciclo de auto-corrección (BUG-05).
+"""Regression of the self-correction loop (BUG-05).
 
-Un reintento llega porque el redactor dijo que el contexto no le bastaba. Repetir la
-misma búsqueda devolvía exactamente lo mismo, así que cada reintento debe ampliar la
-ventana, y no debe reintentarse cuando ampliarla no puede cambiar el contexto.
+A retry happens because the generator said the context was not enough. Repeating the
+same search returned exactly the same thing, so each retry must widen the window, and
+there must be no retry when widening it cannot change the context.
 """
 import pytest
 
@@ -11,83 +11,83 @@ from src.services.agent_graph.routing import (
 )
 
 
-# --- Ventana de recuperación ---
+# --- Retrieval window ---
 
-def test_ampliacion_por_reintento_con_los_valores_por_defecto():
+def test_widening_per_retry_with_the_defaults():
     assert [retrieval_window(15, 10, i) for i in range(3)] == [(15, 10), (30, 15), (45, 20)]
 
 
-def test_la_primera_pasada_respeta_los_parametros_del_cliente():
+def test_the_first_pass_respects_the_client_parameters():
     assert retrieval_window(7, 3, 0) == (7, 3)
 
 
-def test_ampliacion_redondea_hacia_arriba():
-    # La mitad de 3 documentos, hacia arriba, son 2 más por reintento.
+def test_widening_rounds_up():
+    # Half of 3 documents, rounded up, is 2 more per retry.
     assert retrieval_window(7, 3, 1) == (14, 5)
 
 
-@pytest.mark.parametrize("base, iteracion", [((15, 10), 3), ((15, 10), 10), ((50, 20), 1), ((40, 18), 2)])
-def test_tope_en_los_maximos_de_la_api(base, iteracion):
-    retrieve_k, rerank_k = retrieval_window(*base, iteracion)
+@pytest.mark.parametrize("base, iteration", [((15, 10), 3), ((15, 10), 10), ((50, 20), 1), ((40, 18), 2)])
+def test_capped_at_the_api_maximums(base, iteration):
+    retrieve_k, rerank_k = retrieval_window(*base, iteration)
     assert retrieve_k <= 50 and rerank_k <= 20
 
 
-def test_la_ventana_se_estanca_en_los_maximos():
+def test_the_window_stalls_at_the_maximums():
     assert retrieval_window(15, 10, 3) == (50, 20)
     assert retrieval_window(15, 10, 10) == (50, 20)
 
 
-# --- Agotamiento: cuándo ampliar no puede cambiar el contexto ---
+# --- Exhaustion: when widening cannot change the context ---
 
-def test_corpus_agotado():
-    # Pasada 0 con base 15/10: ninguna variante llenó sus 15 candidatos, y los 8 únicos
-    # ya llegaron todos al redactor (8 <= 10).
+def test_corpus_exhausted():
+    # Pass 0 with base 15/10: no variant filled its 15 candidates, and the 8 unique ones
+    # all reached the generator already (8 <= 10).
     assert is_retrieval_exhausted([8, 5, 3], 8, 15, 10, 0)
 
 
-def test_no_agotado_si_alguna_busqueda_lleno_su_cupo():
-    # Una variante devolvió los 15: puede haber más candidatos en el corpus.
+def test_not_exhausted_if_a_search_filled_its_quota():
+    # One variant returned all 15: there may be more candidates in the corpus.
     assert not is_retrieval_exhausted([15, 5, 3], 8, 15, 10, 0)
 
 
-def test_no_agotado_si_quedaron_candidatos_fuera_del_redactor():
-    # 12 únicos, pero solo 10 pasaron el re-ranking: ampliar dejaría pasar más.
+def test_not_exhausted_if_candidates_were_left_out_of_the_generator():
+    # 12 unique, but only 10 passed re-ranking: widening would let more through.
     assert not is_retrieval_exhausted([12, 4, 2], 12, 15, 10, 0)
 
 
-def test_sin_variantes_y_sin_candidatos():
+def test_no_variants_and_no_candidates():
     assert is_retrieval_exhausted([], 0, 15, 10, 0)
 
 
-def test_ventana_saturada():
-    # En la pasada 3, la ventana ya es 50/20 y la siguiente sería igual.
+def test_saturated_window():
+    # On pass 3, the window is already 50/20 and the next one would be the same.
     assert retrieval_window(15, 10, 3) == retrieval_window(15, 10, 4) == (50, 20)
     assert is_retrieval_exhausted([50, 50, 50], 150, 15, 10, 3)
 
 
-def test_ventana_con_margen_no_saturada():
+def test_window_with_room_is_not_saturated():
     assert not is_retrieval_exhausted([15, 15, 15], 45, 15, 10, 0)
 
 
-# --- Decisión del revisor ---
+# --- Reviewer decision ---
 
-def test_se_reintenta_si_falta_contexto_y_la_busqueda_no_esta_agotada():
+def test_retries_if_context_is_missing_and_the_search_is_not_exhausted():
     assert route_reviewer({"needs_more_info": True, "iterations": 1, "retrieval_exhausted": False}) == "researcher"
 
 
-def test_no_se_reintenta_si_la_busqueda_esta_agotada():
+def test_no_retry_if_the_search_is_exhausted():
     assert route_reviewer({"needs_more_info": True, "iterations": 1, "retrieval_exhausted": True}) == "END"
 
 
-@pytest.mark.parametrize("iteraciones", [2, 3])
-def test_no_se_reintenta_tras_dos_pasadas(iteraciones):
-    assert route_reviewer({"needs_more_info": True, "iterations": iteraciones, "retrieval_exhausted": False}) == "END"
+@pytest.mark.parametrize("iterations", [2, 3])
+def test_no_retry_after_two_passes(iterations):
+    assert route_reviewer({"needs_more_info": True, "iterations": iterations, "retrieval_exhausted": False}) == "END"
 
 
-def test_se_termina_si_el_contexto_basta():
+def test_ends_if_the_context_is_enough():
     assert route_reviewer({"needs_more_info": False, "iterations": 1, "retrieval_exhausted": False}) == "END"
 
 
-def test_supervisor_termina_si_ya_hay_respuesta_final():
+def test_supervisor_ends_if_there_is_already_a_final_answer():
     assert route_supervisor({"final_answer": object()}) == "END"
     assert route_supervisor({"final_answer": None}) == "researcher"

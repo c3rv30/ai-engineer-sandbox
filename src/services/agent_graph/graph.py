@@ -7,7 +7,7 @@ from src.services.agent_graph.routing import route_supervisor, route_reviewer
 def build_graph():
     workflow = StateGraph(AgentState)
     
-    # Nodos
+    # Nodes
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("researcher", researcher_node)
     workflow.add_node("generator", generator_node)

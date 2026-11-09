@@ -1,26 +1,26 @@
--- SEC-05: el tenant deja de ser una variable de sesión que app_user pueda reescribir.
--- Ahora viaja junto a una firma HMAC-SHA256 que solo la aplicación sabe calcular, y las
--- políticas RLS consultan una función SECURITY DEFINER que la verifica con una clave
--- guardada donde app_user no puede leerla. Una inyección SQL puede cambiar
--- app.current_tenant, pero no firmarlo: la función devuelve NULL y no ve ninguna fila.
+-- SEC-05: the tenant is no longer a session variable app_user can rewrite. It now
+-- travels with an HMAC-SHA256 signature only the application can compute, and the RLS
+-- policies call a SECURITY DEFINER function that verifies it with a key stored where
+-- app_user cannot read it. An SQL injection can change app.current_tenant, but not sign
+-- it: the function returns NULL and no row is visible.
 --
--- Se ejecuta como superusuario, con la clave en el entorno:
---   TENANT_SIGNING_KEY=<clave> psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+-- Run as superuser, with the key in the environment:
+--   TENANT_SIGNING_KEY=<key> psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
 --       -f sql/migrations/apply_tenant_signing.sql
--- Es la misma clave que la aplicación lee de .env (src/services/db.py).
+-- It is the same key the application reads from .env (src/services/db.py).
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- La clave vive en su propio esquema, no en public. 00_create_app_user.sql deja un
--- ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user, así
--- que toda tabla que el superusuario cree en public nace con un GRANT explícito a
--- app_user, y REVOKE ... FROM PUBLIC no lo deshace. Con la primera versión de esta
--- migración, app_user leía la clave y podía firmar cualquier tenant: comprobado.
+-- The key lives in its own schema, not in public. 00_create_app_user.sql leaves an
+-- ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO app_user, so
+-- every table the superuser creates in public is born with an explicit GRANT to
+-- app_user, and REVOKE ... FROM PUBLIC does not undo it. With the first version of this
+-- migration, app_user read the key and could sign any tenant: verified.
 CREATE SCHEMA IF NOT EXISTS tenant_security;
 REVOKE ALL ON SCHEMA tenant_security FROM PUBLIC;
 REVOKE ALL ON SCHEMA tenant_security FROM app_user;
 
--- Una sola fila: id CHECK (id) fuerza el singleton.
+-- A single row: id CHECK (id) enforces the singleton.
 CREATE TABLE IF NOT EXISTS tenant_security.signing_key (
     id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
     key TEXT NOT NULL
@@ -28,39 +28,39 @@ CREATE TABLE IF NOT EXISTS tenant_security.signing_key (
 REVOKE ALL ON TABLE tenant_security.signing_key FROM PUBLIC;
 REVOKE ALL ON TABLE tenant_security.signing_key FROM app_user;
 
--- Restos de la primera versión de esta migración, si se llegó a aplicar.
+-- Leftovers of the first version of this migration, if it was ever applied.
 DROP TABLE IF EXISTS public.tenant_signing_key;
 
--- \getenv deja la variable intacta si la del entorno no existe, así que se predefine
--- vacía para que el DO de abajo dé un error legible en lugar de uno de sintaxis.
+-- \getenv leaves the variable untouched if the environment one does not exist, so it
+-- is predefined empty for the DO below to give a readable error instead of a syntax one.
 \set tenant_key ''
 \getenv tenant_key TENANT_SIGNING_KEY
 
--- Vía una GUC de sesión porque psql no sustituye variables dentro de $$...$$.
+-- Through a session GUC because psql does not substitute variables inside $$...$$.
 SELECT set_config('init.tenant_key', :'tenant_key', FALSE);
 
 DO $$
 DECLARE k TEXT := NULLIF(current_setting('init.tenant_key', TRUE), '');
 BEGIN
     IF k IS NULL OR length(k) < 32 THEN
-        RAISE EXCEPTION 'TENANT_SIGNING_KEY ausente o de menos de 32 caracteres. Genera una con: openssl rand -hex 32';
+        RAISE EXCEPTION 'TENANT_SIGNING_KEY is missing or shorter than 32 characters. Generate one with: openssl rand -hex 32';
     END IF;
     INSERT INTO tenant_security.signing_key (key) VALUES (k)
         ON CONFLICT (id) DO UPDATE SET key = EXCLUDED.key;
 END $$;
 
--- STABLE, no VOLATILE: así el planificador la evalúa una vez por consulta y puede seguir
--- usando los índices por tenant_id, en lugar de calcular el HMAC fila a fila.
--- search_path fijo: sin él, un rol con permiso de creación podría anteponer un esquema
--- con su propia hmac() y hacer que la función valide cualquier firma.
+-- STABLE, not VOLATILE: that way the planner evaluates it once per query and can keep
+-- using the tenant_id indexes, instead of computing the HMAC row by row.
+-- Fixed search_path: without it, a role with create privileges could put a schema with
+-- its own hmac() first and make the function validate any signature.
 CREATE OR REPLACE FUNCTION app_current_tenant() RETURNS UUID
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, tenant_security, public
 AS $$
-    -- El CASE evalúa en orden: el ::UUID solo se ejecuta sobre un valor ya verificado,
-    -- así que un tenant malformado devuelve NULL en vez de reventar la consulta.
+    -- CASE evaluates in order: the ::UUID only runs on an already verified value, so a
+    -- malformed tenant returns NULL instead of breaking the query.
     SELECT CASE
         WHEN ctx.tenant IS NULL OR ctx.sig IS NULL OR k.key IS NULL THEN NULL
         WHEN encode(hmac(ctx.tenant, k.key, 'sha256'), 'hex') = ctx.sig THEN ctx.tenant::UUID

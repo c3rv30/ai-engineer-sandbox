@@ -9,19 +9,19 @@ from src.services.db import close_pool, get_pool
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Precalentar el pool evita pagar las conexiones en la primera petición. Si Postgres
-    # no está disponible, la API arranca igual y el error aparece en cada petición.
+    # Warming up the pool avoids paying for the connections on the first request. If
+    # Postgres is not available, the API starts anyway and the error shows up on every request.
     try:
         await get_pool()
     except Exception as e:
-        print(f"⚠️ No se pudo abrir el pool de Postgres al arrancar: {e}")
+        print(f"⚠️ Could not open the Postgres pool at startup: {e}")
     yield
     await close_pool()
 
 
 app = FastAPI(
     title="AI Engineer Sandbox API",
-    description="API de Producción para RAG Avanzado (Híbrido + Cross-Encoder + Instructor + JWT/RLS)",
+    description="Production API for advanced RAG (Hybrid + Cross-Encoder + Instructor + JWT/RLS)",
     version="1.0.0",
     lifespan=lifespan,
 )

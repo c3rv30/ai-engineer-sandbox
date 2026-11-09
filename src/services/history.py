@@ -1,33 +1,32 @@
 from typing import List, Dict, Optional
 
-# Ventana de turnos que se envía al LLM. Acota el coste en tokens: el historial
-# completo de una conversación larga inflaría cada prompt sin aportar contexto
-# útil para resolver una correferencia, que casi siempre apunta al turno previo.
+# Window of turns sent to the LLM. It bounds the token cost: the full history of a long
+# conversation would inflate every prompt without adding context useful for resolving a
+# coreference, which nearly always points to the previous turn.
 DEFAULT_WINDOW = 4
 
 
 def format_history(history: Optional[List[Dict[str, str]]], max_turns: int = DEFAULT_WINDOW) -> str:
-    """Formatea los últimos turnos de la conversación como bloque para un prompt.
+    """Formats the last turns of the conversation as a block for a prompt.
 
-    Devuelve cadena vacía si no hay nada utilizable, para que el prompt no
-    contenga un encabezado de historial sin contenido debajo.
+    Returns an empty string if there is nothing usable, so the prompt does not contain
+    a history header with nothing under it.
 
-    El historial lo envía el cliente, así que un turno sin 'role'/'content' —o
-    que ni siquiera sea un diccionario— se descarta en lugar de tumbar la
-    petición entera con un KeyError.
+    The client sends the history, so a turn without 'role'/'content' (or one that is not
+    even a dictionary) is dropped instead of taking down the whole request with a KeyError.
     """
     if not history:
         return ""
 
-    lineas = []
+    lines = []
     for msg in history[-max_turns:]:
         if not isinstance(msg, dict):
             continue
         role, content = msg.get("role"), msg.get("content")
         if role and content:
-            lineas.append(f"- {role.upper()}: {content}")
+            lines.append(f"- {role.upper()}: {content}")
 
-    if not lineas:
+    if not lines:
         return ""
 
-    return "Historial reciente de la conversación:\n" + "\n".join(lineas) + "\n"
+    return "Recent conversation history:\n" + "\n".join(lines) + "\n"

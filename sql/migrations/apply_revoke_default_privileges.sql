@@ -1,10 +1,10 @@
--- HYG-07: retira el privilegio por defecto que 00_create_app_user.sql concedía a
--- app_user sobre toda tabla futura de public. Con él, cualquier tabla que el
--- superusuario creara en public nacía con GRANT ALL a app_user, y REVOKE ... FROM
--- PUBLIC no lo deshacía. Solo afecta a las tablas que se creen a partir de ahora: los
--- GRANT de las cinco tablas de la aplicación son explícitos y se conservan.
+-- HYG-07: removes the default privilege that 00_create_app_user.sql granted app_user on
+-- every future table in public. With it, any table the superuser created in public was
+-- born with GRANT ALL to app_user, and REVOKE ... FROM PUBLIC did not undo it. It only
+-- affects tables created from now on: the GRANTs on the application's five tables are
+-- explicit and stay.
 --
--- Se ejecuta como superusuario (el privilegio por defecto pertenece a postgres):
+-- Run as superuser (the default privilege belongs to postgres):
 --   psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
 --       -f sql/migrations/apply_revoke_default_privileges.sql
 

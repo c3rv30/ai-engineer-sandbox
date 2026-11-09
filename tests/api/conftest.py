@@ -1,7 +1,7 @@
-"""Capa de API: la aplicación completa con TestClient y dobles del grafo y los servicios.
+"""API layer: the full application with TestClient and doubles for the graph and the services.
 
-No se conecta a PostgreSQL ni llama a ningún LLM, así que no necesita Docker. La
-autenticación es la real: los 401 de SEC-01 y SEC-02 no tendrían sentido con un doble.
+It does not connect to PostgreSQL or call any LLM, so it does not need Docker.
+Authentication is the real one: the 401s of SEC-01 and SEC-02 would be meaningless with a double.
 """
 import uuid
 from dataclasses import dataclass, field
@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from tests.api.dobles import GrafoDoble, Guion
+from tests.api.doubles import GraphDouble, Script
 
 API_DIR = __file__.rsplit("/", 1)[0]
 TENANT = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -23,84 +23,84 @@ def pytest_collection_modifyitems(config, items):
 
 
 @dataclass
-class Registro:
-    """Con qué se llamó a cada servicio doblado."""
-    cache_lecturas: list[tuple] = field(default_factory=list)
-    cache_escrituras: list[tuple] = field(default_factory=list)
-    memoria_lecturas: list[tuple] = field(default_factory=list)
-    hechos_guardados: list[tuple] = field(default_factory=list)
-    evaluaciones: list[tuple] = field(default_factory=list)
-    ingestas: list[tuple] = field(default_factory=list)
+class Record:
+    """What each doubled service was called with."""
+    cache_reads: list[tuple] = field(default_factory=list)
+    cache_writes: list[tuple] = field(default_factory=list)
+    memory_reads: list[tuple] = field(default_factory=list)
+    saved_facts: list[tuple] = field(default_factory=list)
+    evaluations: list[tuple] = field(default_factory=list)
+    ingestions: list[tuple] = field(default_factory=list)
 
 
 @dataclass
 class Api:
-    """Cliente HTTP, dobles instalados y utilidades para construir tokens."""
+    """HTTP client, installed doubles and helpers to build tokens."""
     client: TestClient
-    registro: Registro
-    grafo: GrafoDoble
+    record: Record
+    graph: GraphDouble
     _chat: Any
     _ingest: Any
 
-    def guion(self, guion: Guion):
-        self.grafo.guion = guion
-        return self.grafo
+    def script(self, script: Script):
+        self.graph.script = script
+        return self.graph
 
-    def falla_con(self, error: Exception, *, tras: int = 0):
-        self.grafo.error = error
-        self.grafo.error_tras = tras
-        return self.grafo
+    def fails_with(self, error: Exception, *, after: int = 0):
+        self.graph.error = error
+        self.graph.error_after = after
+        return self.graph
 
-    def cabecera(self, *, tenant=TENANT, usuario="bryan", clave=None, sin_sub=False, sin_tenant=False):
+    def header(self, *, tenant=TENANT, user="bryan", key=None, no_sub=False, no_tenant=False):
         import os
         from datetime import datetime, timedelta
 
         import jwt
 
         payload: dict[str, Any] = {"exp": datetime.utcnow() + timedelta(minutes=5)}
-        if not sin_sub:
-            payload["sub"] = usuario
-        if not sin_tenant:
+        if not no_sub:
+            payload["sub"] = user
+        if not no_tenant:
             payload["tenant_id"] = str(tenant)
-        token = jwt.encode(payload, clave or os.environ["JWT_SECRET_KEY"], algorithm="HS256")
+        token = jwt.encode(payload, key or os.environ["JWT_SECRET_KEY"], algorithm="HS256")
         return {"Authorization": f"Bearer {token}"}
 
-    def cache_devuelve(self, datos: dict):
-        self._cache_respuesta[0] = datos
+    def cache_returns(self, data: dict):
+        self._cache_response[0] = data
 
-    def eventos(self, respuesta) -> list[dict]:
-        """Los objetos JSON de un stream SSE, en orden."""
+    def events(self, response) -> list[dict]:
+        """The JSON objects of an SSE stream, in order."""
         import json
 
         return [json.loads(l[len("data: "):], strict=False)
-                for l in respuesta.text.splitlines() if l.startswith("data: ")]
+                for l in response.text.splitlines() if l.startswith("data: ")]
 
 
 @pytest.fixture(autouse=True)
-def sin_postgres(monkeypatch):
-    """Ningún test de esta capa puede abrir una conexión a PostgreSQL.
+def no_postgres(monkeypatch):
+    """No test in this layer may open a connection to PostgreSQL.
 
-    Los servicios de datos están doblados, así que una conexión significa que algo se
-    escapó del doble. Sin esta vigilancia, el test pasaría igual con la base de
-    desarrollo en marcha y fallaría solo en una máquina sin ella.
+    The data services are doubled, so a connection means something escaped the double.
+    Without this guard, the test would pass anyway with the development database
+    running and fail only on a machine without it.
     """
     import asyncpg
 
-    def prohibido(*args, **kwargs):
-        raise AssertionError("la capa de API no debe conectarse a PostgreSQL")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("the API layer must not connect to PostgreSQL")
 
-    monkeypatch.setattr(asyncpg, "connect", prohibido)
-    monkeypatch.setattr(asyncpg, "create_pool", prohibido)
+    monkeypatch.setattr(asyncpg, "connect", forbidden)
+    monkeypatch.setattr(asyncpg, "create_pool", forbidden)
 
 
 @pytest.fixture(scope="session")
 def app_module():
-    """Importa la aplicación una sola vez por sesión: cuesta ~10 s (modelos y clientes).
+    """Imports the application once per session: it costs ~10 s (models and clients).
 
-    Desactiva además la telemetría de onnxruntime, que llega con FlashRank. Su hilo de
-    eventos procesa respuestas HTTP mientras el intérprete ya está cerrando y aborta el
-    proceso (código 134, "recursive_mutex lock failed"), después de que todos los tests
-    hayan pasado: la suite completa fallaba así ~7 de cada 8 ejecuciones.
+    It also disables the telemetry of onnxruntime, which comes with FlashRank. Its
+    events thread processes HTTP responses while the interpreter is already shutting
+    down and aborts the process (code 134, "recursive_mutex lock failed"), after every
+    test has passed: the full suite failed that way ~7 of every 8 runs.
     """
     from src.api import main
 
@@ -112,32 +112,32 @@ def api(monkeypatch, app_module):
     from src.api.routers import chat as chat_mod
     from src.api.routers import ingest as ingest_mod
 
-    registro = Registro()
-    respuesta_cache: list[Any] = [None]
+    record = Record()
+    cache_response: list[Any] = [None]
 
     async def check_semantic_cache(tenant_id, query, *args, **kwargs):
-        registro.cache_lecturas.append((tenant_id, query))
-        return respuesta_cache[0]
+        record.cache_reads.append((tenant_id, query))
+        return cache_response[0]
 
     async def save_semantic_cache(tenant_id, query, response_dict, *args, **kwargs):
-        registro.cache_escrituras.append((tenant_id, query, response_dict))
+        record.cache_writes.append((tenant_id, query, response_dict))
 
     async def retrieve_user_facts(tenant_id, query, *args, **kwargs):
-        registro.memoria_lecturas.append((tenant_id, query))
+        record.memory_reads.append((tenant_id, query))
         return ""
 
     async def extract_and_save_facts(tenant_id, user_message, *args, **kwargs):
-        registro.hechos_guardados.append((tenant_id, user_message))
+        record.saved_facts.append((tenant_id, user_message))
 
     async def evaluate_rag_response(tenant_id, query, answer, context, *args, **kwargs):
-        registro.evaluaciones.append((tenant_id, query, answer, context))
+        record.evaluations.append((tenant_id, query, answer, context))
 
     async def ingest_file(path, tenant_id, *args, **kwargs):
-        registro.ingestas.append((path, tenant_id, kwargs.get("source")))
+        record.ingestions.append((path, tenant_id, kwargs.get("source")))
         return {"chunks_ingested": 1, "message": "ok"}
 
-    grafo = GrafoDoble()
-    monkeypatch.setattr(chat_mod, "agent_graph", grafo)
+    graph = GraphDouble()
+    monkeypatch.setattr(chat_mod, "agent_graph", graph)
     monkeypatch.setattr(chat_mod, "check_semantic_cache", check_semantic_cache)
     monkeypatch.setattr(chat_mod, "save_semantic_cache", save_semantic_cache)
     monkeypatch.setattr(chat_mod, "retrieve_user_facts", retrieve_user_facts)
@@ -145,10 +145,10 @@ def api(monkeypatch, app_module):
     monkeypatch.setattr(chat_mod, "evaluate_rag_response", evaluate_rag_response)
     monkeypatch.setattr(ingest_mod, "ingest_file", ingest_file)
 
-    # Sin gestor de contexto a propósito: así no se ejecuta el lifespan y la capa no
-    # intenta abrir el pool de Postgres.
-    cliente = TestClient(app_module.app)
-    objeto = Api(client=cliente, registro=registro, grafo=grafo, _chat=chat_mod, _ingest=ingest_mod)
-    objeto._cache_respuesta = respuesta_cache
-    yield objeto
-    cliente.close()
+    # No context manager on purpose: that way the lifespan does not run and the layer
+    # does not try to open the Postgres pool.
+    client = TestClient(app_module.app)
+    obj = Api(client=client, record=record, graph=graph, _chat=chat_mod, _ingest=ingest_mod)
+    obj._cache_response = cache_response
+    yield obj
+    client.close()

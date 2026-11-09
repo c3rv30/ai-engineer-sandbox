@@ -1,10 +1,10 @@
--- Esquema completo del sandbox. Lo ejecuta el entrypoint de Postgres sobre un volumen
--- vacío, en orden alfabético y después de 00_create_app_user.sql, que crea el rol al
--- que se conceden los permisos del final. Los scripts de sql/migrations/ son el
--- histórico con el que se construyó la base de desarrollo; aquí está su resultado.
+-- Full sandbox schema. The Postgres entrypoint runs it on an empty volume, in
+-- alphabetical order and after 00_create_app_user.sql, which creates the role the
+-- privileges at the end are granted to. The scripts in sql/migrations/ are the history
+-- the development database was built with; this is their result.
 
 CREATE EXTENSION IF NOT EXISTS vector;
--- hmac() para verificar la firma del contexto de tenant (SEC-05).
+-- hmac() to verify the signature of the tenant context (SEC-05).
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS documents (
     content TEXT,
     embedding vector(384),
     metadata JSONB,
+    -- 'spanish': the language of the corpus. The retriever queries with the same
+    -- configuration (src/services/retriever.py).
     fts tsvector GENERATED ALWAYS AS (to_tsvector('spanish', content)) STORED
 );
 
@@ -26,7 +28,7 @@ CREATE INDEX IF NOT EXISTS documents_metadata_idx ON documents USING GIN (metada
 CREATE INDEX IF NOT EXISTS documents_tenant_id_idx ON documents (tenant_id);
 
 
--- Fase 4: Semantic Cache
+-- Phase 4: Semantic Cache
 CREATE TABLE IF NOT EXISTS semantic_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
@@ -38,7 +40,7 @@ CREATE TABLE IF NOT EXISTS semantic_cache (
 CREATE INDEX IF NOT EXISTS cache_embedding_idx ON semantic_cache USING hnsw (query_embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS cache_tenant_idx ON semantic_cache(tenant_id);
 
--- Fase 4: Long-Term Memory
+-- Phase 4: Long-Term Memory
 CREATE TABLE IF NOT EXISTS user_memory (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
@@ -49,7 +51,7 @@ CREATE TABLE IF NOT EXISTS user_memory (
 CREATE INDEX IF NOT EXISTS memory_embedding_idx ON user_memory USING hnsw (fact_embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS memory_tenant_idx ON user_memory(tenant_id);
 
--- Fase 4: Observabilidad Activa (Evaluaciones RAG)
+-- Phase 4: Active observability (RAG evaluations)
 CREATE TABLE IF NOT EXISTS rag_evaluations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
@@ -62,7 +64,7 @@ CREATE TABLE IF NOT EXISTS rag_evaluations (
 );
 CREATE INDEX IF NOT EXISTS evaluations_tenant_idx ON rag_evaluations(tenant_id);
 
--- Fase 3: GraphRAG
+-- Phase 3: GraphRAG
 CREATE TABLE IF NOT EXISTS knowledge_graph (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
@@ -76,9 +78,9 @@ CREATE INDEX IF NOT EXISTS kg_target_idx ON knowledge_graph(target_node);
 CREATE INDEX IF NOT EXISTS kg_tenant_idx ON knowledge_graph(tenant_id);
 
 
--- Row Level Security. FORCE hace que las políticas se apliquen también al propietario
--- de las tablas; sin él, el propietario las elude. Un superusuario las elude siempre,
--- con o sin FORCE: por eso la aplicación debe conectar como app_user.
+-- Row Level Security. FORCE makes the policies apply to the tables' owner too; without
+-- it, the owner bypasses them. A superuser always bypasses them, with or without FORCE:
+-- that is why the application must connect as app_user.
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents FORCE ROW LEVEL SECURITY;
 ALTER TABLE semantic_cache ENABLE ROW LEVEL SECURITY;
@@ -90,16 +92,16 @@ ALTER TABLE rag_evaluations FORCE ROW LEVEL SECURITY;
 ALTER TABLE knowledge_graph ENABLE ROW LEVEL SECURITY;
 ALTER TABLE knowledge_graph FORCE ROW LEVEL SECURITY;
 
--- Contexto de tenant firmado (SEC-05). Las políticas no leen app.current_tenant
--- directamente: una variable de sesión la puede reescribir el propio app_user desde
--- cualquier sentencia inyectada. Leen app_current_tenant(), que solo devuelve el tenant
--- si viene acompañado de una firma HMAC calculada con la clave de abajo, que app_user
--- no puede leer. El detalle está en sql/migrations/apply_tenant_signing.sql.
+-- Signed tenant context (SEC-05). The policies do not read app.current_tenant
+-- directly: app_user itself can rewrite a session variable from any injected
+-- statement. They read app_current_tenant(), which returns the tenant only if it comes
+-- with an HMAC signature computed with the key below, which app_user cannot read. The
+-- details are in sql/migrations/apply_tenant_signing.sql.
 --
--- La clave vive en su propio esquema, no en public. Hasta HYG-07, 00_create_app_user.sql
--- dejaba un ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO
--- app_user, y una tabla de public nacía legible para app_user; el esquema aparte, con
--- sus REVOKE explícitos, no depende de que ese privilegio por defecto no vuelva.
+-- The key lives in its own schema, not in public. Until HYG-07, 00_create_app_user.sql
+-- left an ALTER DEFAULT PRIVILEGES IN SCHEMA public ... GRANT ALL ON TABLES TO
+-- app_user, and a table in public was born readable by app_user; the separate schema,
+-- with its explicit REVOKEs, does not depend on that default privilege never coming back.
 CREATE SCHEMA IF NOT EXISTS tenant_security;
 REVOKE ALL ON SCHEMA tenant_security FROM PUBLIC;
 REVOKE ALL ON SCHEMA tenant_security FROM app_user;
@@ -111,37 +113,37 @@ CREATE TABLE IF NOT EXISTS tenant_security.signing_key (
 REVOKE ALL ON TABLE tenant_security.signing_key FROM PUBLIC;
 REVOKE ALL ON TABLE tenant_security.signing_key FROM app_user;
 
--- \getenv deja la variable intacta si la del entorno no existe, así que se predefine
--- vacía para que el DO de abajo dé un error legible en lugar de uno de sintaxis.
--- El entrypoint corre con ON_ERROR_STOP=1: sin clave, el contenedor sale (como BUG-04).
+-- \getenv leaves the variable untouched if the environment one does not exist, so it
+-- is predefined empty for the DO below to give a readable error instead of a syntax one.
+-- The entrypoint runs with ON_ERROR_STOP=1: without a key, the container exits (like BUG-04).
 \set tenant_key ''
 \getenv tenant_key TENANT_SIGNING_KEY
 
--- Vía una GUC de sesión porque psql no sustituye variables dentro de $$...$$.
+-- Through a session GUC because psql does not substitute variables inside $$...$$.
 SELECT set_config('init.tenant_key', :'tenant_key', FALSE);
 
 DO $$
 DECLARE k TEXT := NULLIF(current_setting('init.tenant_key', TRUE), '');
 BEGIN
     IF k IS NULL OR length(k) < 32 THEN
-        RAISE EXCEPTION 'TENANT_SIGNING_KEY ausente o de menos de 32 caracteres. Genera una con: openssl rand -hex 32';
+        RAISE EXCEPTION 'TENANT_SIGNING_KEY is missing or shorter than 32 characters. Generate one with: openssl rand -hex 32';
     END IF;
     INSERT INTO tenant_security.signing_key (key) VALUES (k)
         ON CONFLICT (id) DO UPDATE SET key = EXCLUDED.key;
 END $$;
 
--- STABLE, no VOLATILE: el planificador la evalúa una vez por consulta y puede seguir
--- usando los índices por tenant_id, en lugar de calcular el HMAC fila a fila.
--- search_path fijo: sin él, un rol con permiso de creación podría anteponer un esquema
--- con su propia hmac() y hacer que la función valide cualquier firma.
+-- STABLE, not VOLATILE: the planner evaluates it once per query and can keep using the
+-- tenant_id indexes, instead of computing the HMAC row by row.
+-- Fixed search_path: without it, a role with create privileges could put a schema with
+-- its own hmac() first and make the function validate any signature.
 CREATE OR REPLACE FUNCTION app_current_tenant() RETURNS UUID
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, tenant_security, public
 AS $$
-    -- El CASE evalúa en orden: el ::UUID solo se ejecuta sobre un valor ya verificado,
-    -- así que un tenant malformado devuelve NULL en vez de reventar la consulta.
+    -- CASE evaluates in order: the ::UUID only runs on an already verified value, so a
+    -- malformed tenant returns NULL instead of breaking the query.
     SELECT CASE
         WHEN ctx.tenant IS NULL OR ctx.sig IS NULL OR k.key IS NULL THEN NULL
         WHEN encode(hmac(ctx.tenant, k.key, 'sha256'), 'hex') = ctx.sig THEN ctx.tenant::UUID
@@ -173,6 +175,6 @@ DROP POLICY IF EXISTS kg_tenant_isolation_policy ON knowledge_graph;
 CREATE POLICY kg_tenant_isolation_policy ON knowledge_graph
     USING (tenant_id = app_current_tenant());
 
--- Los únicos permisos de app_user sobre tablas: no hay privilegios por defecto en public
--- (HYG-07). Una tabla nueva que deba usar la aplicación necesita su propio GRANT.
+-- app_user's only privileges on tables: there are no default privileges in public
+-- (HYG-07). A new table the application must use needs its own GRANT.
 GRANT ALL PRIVILEGES ON TABLE documents, semantic_cache, user_memory, rag_evaluations, knowledge_graph TO app_user;

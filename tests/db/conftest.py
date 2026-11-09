@@ -1,10 +1,10 @@
-"""Base PostgreSQL desechable para la capa de base de datos.
+"""Disposable PostgreSQL database for the database layer.
 
-Cada ejecución levanta su propia base desde volumen vacío con docker-compose.yml y los
-scripts de sql/, y la borra al terminar. Nunca toca la base de desarrollo: otro
-proyecto Compose (`sandbox_tests`), otro puerto y otro volumen, que se borra por su
-nombre exacto. Si la base no se puede levantar, la sesión falla: una capa de base de
-datos saltada en silencio parecería superada sin haber comprobado nada.
+Each run starts its own database from an empty volume with docker-compose.yml and the
+sql/ scripts, and deletes it at the end. It never touches the development database:
+another Compose project (`sandbox_tests`), another port and another volume, deleted by
+its exact name. If the database cannot be started, the session fails: a database layer
+skipped silently would look passed without having checked anything.
 """
 import json
 import os
@@ -42,7 +42,7 @@ def _run(cmd, timeout=180):
 
 
 def _volume_project(name):
-    """Proyecto Compose al que pertenece un volumen, o None si no existe."""
+    """Compose project a volume belongs to, or None if it does not exist."""
     r = _run(["docker", "volume", "inspect", name])
     if r.returncode != 0:
         return None
@@ -54,21 +54,21 @@ def _teardown(compose):
     owner = _volume_project(VOLUME)
     if owner is None:
         return
-    # Solo por nombre exacto y solo si es de este proyecto: nunca prune ni prefijos.
+    # Only by exact name and only if it belongs to this project: never prune or prefixes.
     if owner != PROJECT:
-        pytest.fail(f"El volumen {VOLUME} existe pero pertenece al proyecto {owner!r}; no se borra.", pytrace=False)
+        pytest.fail(f"Volume {VOLUME} exists but belongs to project {owner!r}; not deleting it.", pytrace=False)
     r = _run(["docker", "volume", "rm", VOLUME])
     if r.returncode != 0:
-        pytest.fail(f"No se pudo borrar el volumen {VOLUME}: {r.stderr.strip()}", pytrace=False)
+        pytest.fail(f"Could not delete volume {VOLUME}: {r.stderr.strip()}", pytrace=False)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def test_database():
-    # Guardián del DSN: src/services/db.py fija la base al importarse. Si algo lo importó
-    # antes de que tests/conftest.py fijara el entorno, apuntaría a desarrollo.
+    # DSN guard: src/services/db.py pins the database at import time. If something imported
+    # it before tests/conftest.py set the environment, it would point at development.
     from src.services import db
     if f":{TEST_DB_PORT}/" not in db.DB_DSN or f":{DEV_DB_PORT}/" in db.DB_DSN:
-        pytest.exit(f"src.services.db.DB_DSN no apunta a la base de pruebas: {db.DB_DSN}", returncode=1)
+        pytest.exit(f"src.services.db.DB_DSN does not point at the test database: {db.DB_DSN}", returncode=1)
 
     with tempfile.TemporaryDirectory() as tmp:
         override = Path(tmp) / "override.yml"
@@ -76,17 +76,17 @@ def test_database():
         compose = ["docker", "compose", "-p", PROJECT, "--project-directory", str(REPO),
                    "-f", str(REPO / "docker-compose.yml"), "-f", str(override)]
         try:
-            # Restos de una ejecución interrumpida (kill -9, Ctrl+C durante el arranque).
+            # Leftovers of an interrupted run (kill -9, Ctrl+C during startup).
             _teardown(compose)
             up = _run([*compose, "up", "-d", "--wait", "--wait-timeout", "120"], timeout=240)
         except FileNotFoundError:
-            pytest.fail("No se pudo levantar la base de pruebas: el comando 'docker' no está disponible.", pytrace=False)
+            pytest.fail("Could not start the test database: the 'docker' command is not available.", pytrace=False)
         except subprocess.TimeoutExpired:
             _teardown(compose)
-            pytest.fail("No se pudo levantar la base de pruebas: docker compose no respondió a tiempo.", pytrace=False)
+            pytest.fail("Could not start the test database: docker compose did not respond in time.", pytrace=False)
         if up.returncode != 0:
             _teardown(compose)
-            pytest.fail("No se pudo levantar la base de pruebas con docker compose:\n"
+            pytest.fail("Could not start the test database with docker compose:\n"
                         + (up.stderr or up.stdout).strip(), pytrace=False)
         try:
             yield
@@ -96,7 +96,7 @@ def test_database():
 
 @pytest.fixture(scope="session", autouse=True)
 async def app_pool(test_database):
-    """Cierra al final de la sesión el pool que la aplicación crea bajo demanda."""
+    """Closes, at the end of the session, the pool the application creates on demand."""
     from src.services.db import close_pool
     yield
     await close_pool()
@@ -104,7 +104,7 @@ async def app_pool(test_database):
 
 @pytest.fixture
 async def superuser():
-    """Conexión como postgres, que elude RLS: para sembrar y para inspeccionar."""
+    """Connection as postgres, which bypasses RLS: for seeding and inspecting."""
     conn = await asyncpg.connect(SUPERUSER_DSN)
     try:
         yield conn
@@ -114,7 +114,7 @@ async def superuser():
 
 @pytest.fixture
 async def app_user_conn():
-    """Conexión directa como app_user, sin tenant ni firma: lo que tendría una sentencia inyectada."""
+    """Direct connection as app_user, with no tenant or signature: what an injected statement would have."""
     conn = await asyncpg.connect(os.environ["DATABASE_URL"])
     try:
         yield conn

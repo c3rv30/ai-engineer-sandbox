@@ -10,54 +10,54 @@ if "token" not in st.session_state:
 
 # Sidebar
 with st.sidebar:
-    st.header("🔐 Autenticación (JWT/RLS)")
+    st.header("🔐 Authentication (JWT/RLS)")
     if not st.session_state.token:
         with st.form("login_form"):
-            st.write("Inicia sesión para aislar tus datos.")
-            username = st.text_input("Usuario (ej. bryan o empresa_x)")
-            password = st.text_input("Contraseña (password123)", type="password")
-            submitted = st.form_submit_button("Ingresar")
+            st.write("Log in to isolate your data.")
+            username = st.text_input("Username (e.g. bryan or company_x)")
+            password = st.text_input("Password (password123)", type="password")
+            submitted = st.form_submit_button("Log in")
             if submitted:
                 res = requests.post(f"{API_URL}/auth/token", data={"username": username, "password": password})
                 if res.status_code == 200:
                     st.session_state.token = res.json()["access_token"]
-                    st.success("Logueado con éxito")
+                    st.success("Logged in")
                     st.rerun()
                 else:
-                    st.error("Credenciales incorrectas")
+                    st.error("Incorrect credentials")
     else:
-        st.success("✅ Estás logueado de forma segura.")
-        if st.button("Cerrar Sesión"):
+        st.success("✅ You are securely logged in.")
+        if st.button("Log out"):
             st.session_state.token = None
             st.rerun()
 
     st.markdown("---")
-    st.header("📁 Ingesta Multimodal")
+    st.header("📁 Multimodal Ingestion")
     
     uploaded_file = st.file_uploader(
-        "Sube un archivo a tu Tenant", 
+        "Upload a file to your tenant", 
         type=["md", "txt", "pdf", "png", "jpg", "jpeg"]
     )
     
     if uploaded_file is not None and st.session_state.token:
-        if st.button("Procesar Archivo"):
-            with st.spinner(f"Ingestando {uploaded_file.name}..."):
+        if st.button("Process file"):
+            with st.spinner(f"Ingesting {uploaded_file.name}..."):
                 try:
                     headers = {"Authorization": f"Bearer {st.session_state.token}"}
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
                     res = requests.post(f"{API_URL}/ingest/", headers=headers, files=files, timeout=120)
                     if res.status_code == 200:
                         stats = res.json()
-                        st.success(f"✅ ¡Éxito! Generados y guardados {stats['inserted_chunks']} vectores en tu Tenant.")
+                        st.success(f"✅ Done! {stats['inserted_chunks']} vectors generated and stored in your tenant.")
                     else:
-                        st.error(f"Error de la API: {res.json().get('detail', res.text)}")
+                        st.error(f"API error: {res.json().get('detail', res.text)}")
                 except Exception as e:
-                    st.error(f"Error subiendo archivo: {e}")
+                    st.error(f"Error uploading file: {e}")
     elif uploaded_file is not None and not st.session_state.token:
-        st.warning("⚠️ Debes iniciar sesión para subir archivos.")
+        st.warning("⚠️ You must log in to upload files.")
 
 st.title("🤖 Sandbox RAG Chat")
-st.markdown("Interfaz RAG Multi-Tenant (Seguridad JWT y RLS en Postgres)")
+st.markdown("Multi-tenant RAG interface (JWT security and RLS in Postgres)")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -66,23 +66,23 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "sources" in message and message["sources"]:
-            with st.expander("Fuentes consultadas"):
+            with st.expander("Sources"):
                 for source in message["sources"]:
                     st.caption(f"- *{source['quote']}* (Doc ID: {source['document_id']})")
         if "confidence" in message:
             color = "green" if message["confidence"] > 0.8 else "orange"
-            st.markdown(f"**Confianza:** :{color}[{message['confidence']}]")
+            st.markdown(f"**Confidence:** :{color}[{message['confidence']}]")
 
-if prompt := st.chat_input("Haz una pregunta sobre el contexto..."):
+if prompt := st.chat_input("Ask a question about the context..."):
     if not st.session_state.token:
-        st.warning("⚠️ Debes iniciar sesión en la barra lateral para poder chatear.")
+        st.warning("⚠️ You must log in from the sidebar to chat.")
         st.stop()
         
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
-        with st.spinner("Pensando y ruteando..."):
+        with st.spinner("Thinking and routing..."):
             try:
                 chat_history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages[:-1]]
                 payload = {"query": prompt, "history": chat_history}
@@ -126,12 +126,12 @@ if prompt := st.chat_input("Haz una pregunta sobre el contexto..."):
                     final_answer = st.write_stream(stream_parser())
                     
                     if final_sources:
-                        with sources_placeholder.expander("Fuentes consultadas"):
+                        with sources_placeholder.expander("Sources"):
                             for source in final_sources:
                                 st.caption(f"- *{source['quote']}* (Doc ID: {source['document_id']})")
                                 
                     color = "green" if final_confidence > 0.8 else "orange"
-                    confidence_placeholder.markdown(f"**Confianza:** :{color}[{final_confidence}]")
+                    confidence_placeholder.markdown(f"**Confidence:** :{color}[{final_confidence}]")
                     
                     st.session_state.messages.append({
                         "role": "assistant", 
@@ -141,6 +141,6 @@ if prompt := st.chat_input("Haz una pregunta sobre el contexto..."):
                     })
                     
                 else:
-                    st.error(f"Error de la API: {response.status_code}")
+                    st.error(f"API error: {response.status_code}")
             except Exception as e:
-                st.error(f"No se pudo conectar a la API en {API_URL}. ¿Está corriendo FastAPI? Error: {e}")
+                st.error(f"Could not connect to the API at {API_URL}. Is FastAPI running? Error: {e}")

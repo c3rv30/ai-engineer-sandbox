@@ -1,79 +1,79 @@
-"""Regresión del objeto que se persiste en el caché (BUG-01).
+"""Regression of the object stored in the cache (BUG-01).
 
-El generador SSE acumula los mensajes de progreso de cada nodo en el texto que ve el
-cliente. Ese texto no debe acabar en el caché ni en el evaluador: lo que se persiste
-es la respuesta estructurada limpia.
+The SSE generator accumulates each node's progress messages into the text the client
+sees. That text must not end up in the cache or in the evaluator: what is stored is the
+clean structured answer.
 """
-from tests.api.dobles import (
-    PROGRESO_INVESTIGADOR, PROGRESO_SUPERVISOR, PREFIJO_REDACTOR, documento, guion_redactor,
+from tests.api.doubles import (
+    RESEARCHER_PROGRESS, SUPERVISOR_PROGRESS, GENERATOR_PREFIX, document, generator_script,
 )
 
-TEXTO = "Trabajó en Betterfly desde abril de 2024."
-PROGRESO = [PROGRESO_SUPERVISOR.strip(), PROGRESO_INVESTIGADOR.strip(), PREFIJO_REDACTOR.strip()]
+TEXT = "He has worked at Betterfly since April 2024."
+PROGRESS = [SUPERVISOR_PROGRESS.strip(), RESEARCHER_PROGRESS.strip(), GENERATOR_PREFIX.strip()]
 
 
-def stream(api, **cuerpo):
-    peticion = {"query": "¿Dónde trabajó?", **cuerpo}
-    return api.client.post("/chat/stream/", json=peticion, headers=api.cabecera())
+def stream(api, **body):
+    request = {"query": "Where did he work?", **body}
+    return api.client.post("/chat/stream/", json=request, headers=api.header())
 
 
-def test_lo_que_se_guarda_no_lleva_los_mensajes_de_progreso(api):
-    api.guion(guion_redactor(TEXTO, trozos=["Trabajó en Betterfly ", "desde abril de 2024."]))
+def test_what_is_stored_carries_no_progress_messages(api):
+    api.script(generator_script(TEXT, chunks=["He has worked at Betterfly ", "since April 2024."]))
     r = stream(api)
-    eventos = api.eventos(r)
+    events = api.events(r)
 
-    # Lo que ve el cliente sí lleva el progreso: es lo que renderiza la interfaz.
-    emitido = eventos[-1]["answer"]
-    assert all(marca in emitido for marca in PROGRESO), emitido
-    assert TEXTO in emitido
+    # What the client sees does carry the progress: it is what the interface renders.
+    emitted = events[-1]["answer"]
+    assert all(mark in emitted for mark in PROGRESS), emitted
+    assert TEXT in emitted
 
-    # Lo que se manda a persistir, no.
-    assert len(api.registro.cache_escrituras) == 1
-    guardado = api.registro.cache_escrituras[0][2]
-    assert guardado["answer"] == TEXTO
-    for marca in PROGRESO:
-        assert marca not in guardado["answer"]
-    assert guardado["confidence_score"] == 0.9 and guardado["requires_more_info"] is False
+    # What is sent to storage does not.
+    assert len(api.record.cache_writes) == 1
+    stored = api.record.cache_writes[0][2]
+    assert stored["answer"] == TEXT
+    for mark in PROGRESS:
+        assert mark not in stored["answer"]
+    assert stored["confidence_score"] == 0.9 and stored["requires_more_info"] is False
 
 
-def test_el_evaluador_recibe_la_respuesta_limpia(api):
-    docs = [documento("Betterfly, 2024", id_="doc-9")]
-    api.guion(guion_redactor(TEXTO, documentos=docs))
+def test_the_evaluator_gets_the_clean_answer(api):
+    docs = [document("Betterfly, 2024", id_="doc-9")]
+    api.script(generator_script(TEXT, documents=docs))
     stream(api)
 
-    assert len(api.registro.evaluaciones) == 1
-    _, consulta, respuesta_evaluada, contexto = api.registro.evaluaciones[0]
-    assert consulta == "¿Dónde trabajó?"
-    assert respuesta_evaluada == TEXTO
-    for marca in PROGRESO:
-        assert marca not in respuesta_evaluada
-    assert [d.id for d in contexto] == ["doc-9"]
+    assert len(api.record.evaluations) == 1
+    _, query, evaluated_answer, context = api.record.evaluations[0]
+    assert query == "Where did he work?"
+    assert evaluated_answer == TEXT
+    for mark in PROGRESS:
+        assert mark not in evaluated_answer
+    assert [d.id for d in context] == ["doc-9"]
 
 
-def test_la_memoria_recibe_la_pregunta_del_usuario(api):
-    api.guion(guion_redactor(TEXTO))
+def test_memory_gets_the_user_question(api):
+    api.script(generator_script(TEXT))
     stream(api)
-    assert api.registro.hechos_guardados == [(api.grafo.invocaciones[0]["tenant_id"], "¿Dónde trabajó?")]
+    assert api.record.saved_facts == [(api.graph.invocations[0]["tenant_id"], "Where did he work?")]
 
 
-def test_respuesta_no_cacheable_no_se_guarda(api):
-    # requires_more_info=True: el propio sistema la da por insuficiente (BUG-02).
-    api.guion(guion_redactor(TEXTO, requiere_mas=True))
+def test_non_cacheable_answer_is_not_stored(api):
+    # requires_more_info=True: the system itself considers it insufficient (BUG-02).
+    api.script(generator_script(TEXT, needs_more=True))
     stream(api)
-    assert api.registro.cache_escrituras == []
+    assert api.record.cache_writes == []
 
 
-def test_peticion_con_historial_ni_lee_ni_escribe_cache(api):
-    api.guion(guion_redactor(TEXTO))
-    stream(api, history=[{"role": "user", "content": "¿Trabajó en Betterfly?"},
-                         {"role": "assistant", "content": "Sí."}])
-    assert api.registro.cache_lecturas == []
-    assert api.registro.cache_escrituras == []
+def test_request_with_history_neither_reads_nor_writes_the_cache(api):
+    api.script(generator_script(TEXT))
+    stream(api, history=[{"role": "user", "content": "Did he work at Betterfly?"},
+                         {"role": "assistant", "content": "Yes."}])
+    assert api.record.cache_reads == []
+    assert api.record.cache_writes == []
 
 
-def test_respuesta_normal_tambien_persiste_el_objeto_limpio(api):
-    api.guion(guion_redactor(TEXTO))
-    r = api.client.post("/chat/", json={"query": "¿Dónde trabajó?"}, headers=api.cabecera())
+def test_normal_answer_also_stores_the_clean_object(api):
+    api.script(generator_script(TEXT))
+    r = api.client.post("/chat/", json={"query": "Where did he work?"}, headers=api.header())
     assert r.status_code == 200
-    assert r.json()["answer"] == TEXTO
-    assert api.registro.cache_escrituras[0][2]["answer"] == TEXTO
+    assert r.json()["answer"] == TEXT
+    assert api.record.cache_writes[0][2]["answer"] == TEXT

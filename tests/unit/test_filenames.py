@@ -1,26 +1,26 @@
-"""Regresión del nombre de archivo en la ingesta (SEC-04).
+"""Regression of the file name on ingestion (SEC-04).
 
-El nombre lo controla el cliente. Con '../' se escribía, y el finally borraba, fuera
-del directorio temporal; ahora solo se conserva su último componente como metadato.
+The client controls the name. With '../' the file was written, and the finally deleted
+it, outside the temporary directory; now only its last component is kept as metadata.
 """
 import pytest
 
 from src.services.filenames import source_name
 
 
-@pytest.mark.parametrize("enviado, esperado", [
+@pytest.mark.parametrize("sent, expected", [
     ("cv.pdf", "cv.pdf"),
     ("../../etc/passwd.txt", "passwd.txt"),
     ("/var/folders/v2/T/cv.txt", "cv.txt"),
     ("..\\..\\Windows\\win.ini.md", "win.ini.md"),
-    ("carpeta/sub\\mixto/../informe.pdf", "informe.pdf"),
-    ("nombre con espacios.md", "nombre con espacios.md"),
+    ("folder/sub\\mixed/../report.pdf", "report.pdf"),
+    ("name with spaces.md", "name with spaces.md"),
 ])
-def test_solo_el_ultimo_componente(enviado, esperado):
-    assert source_name(enviado) == esperado
+def test_only_the_last_component(sent, expected):
+    assert source_name(sent) == expected
 
 
-@pytest.mark.parametrize("enviado", ["../../etc/passwd.txt", "..\\secreto.txt", "/abs/ruta.md", "a/../b.pdf"])
-def test_sin_separadores_ni_componentes_de_ruta(enviado):
-    resultado = source_name(enviado)
-    assert "/" not in resultado and "\\" not in resultado and resultado not in ("..", ".")
+@pytest.mark.parametrize("sent", ["../../etc/passwd.txt", "..\\secret.txt", "/abs/path.md", "a/../b.pdf"])
+def test_no_separators_or_path_components(sent):
+    result = source_name(sent)
+    assert "/" not in result and "\\" not in result and result not in ("..", ".")

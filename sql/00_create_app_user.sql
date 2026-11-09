@@ -1,14 +1,14 @@
 CREATE USER app_user WITH PASSWORD 'apppassword';
--- Solo CONNECT, no ALL (SEC-07). ALL incluía CREATE, que permite crear esquemas: con
--- uno propio y ALTER ROLE app_user SET search_path, que un rol puede fijarse a sí mismo,
--- las consultas sin esquema de la aplicación iban a tablas de app_user sin RLS.
+-- Only CONNECT, not ALL (SEC-07). ALL included CREATE, which allows creating schemas:
+-- with one of its own and ALTER ROLE app_user SET search_path, which a role can set on
+-- itself, the application's unqualified queries went to app_user's tables without RLS.
 GRANT CONNECT ON DATABASE postgres TO app_user;
--- Se ejecuta antes que 01_init.sql: aquí todavía no existe ninguna tabla. El FORCE ROW
--- LEVEL SECURITY que vivía en este script está ahora en 01_init.sql, para las cinco.
+-- Runs before 01_init.sql: no table exists yet at this point. The FORCE ROW LEVEL
+-- SECURITY that used to live in this script is now in 01_init.sql, for all five tables.
 --
--- Sin GRANT sobre las tablas de public y sin ALTER DEFAULT PRIVILEGES (HYG-07). Los
--- GRANT ... ON ALL TABLES/SEQUENCES no hacían nada, porque aún no hay tablas, y el
--- ALTER DEFAULT PRIVILEGES regalaba a app_user toda tabla que el superusuario creara
--- después en public, incluidas las que no debe leer; REVOKE ... FROM PUBLIC no lo
--- deshacía. Los permisos de la aplicación los concede 01_init.sql, tabla por tabla:
--- una tabla nueva no es visible para app_user hasta que se le conceda de forma explícita.
+-- No GRANT on the tables in public and no ALTER DEFAULT PRIVILEGES (HYG-07). The
+-- GRANT ... ON ALL TABLES/SEQUENCES did nothing, because there are no tables yet, and
+-- ALTER DEFAULT PRIVILEGES handed app_user every table the superuser created later in
+-- public, including the ones it must not read; REVOKE ... FROM PUBLIC did not undo it.
+-- The application's privileges are granted by 01_init.sql, table by table: a new
+-- table is not visible to app_user until it is granted explicitly.

@@ -1,36 +1,36 @@
-"""Instancia única del modelo de embeddings, compartida por todo el proceso (PERF-02).
+"""Single instance of the embedding model, shared by the whole process (PERF-02).
 
-Antes lo cargaban por separado retriever, cache, memory e ingestion: cuatro copias del
-modelo en memoria y cuatro cargas seguidas al importar la API.
+Before, retriever, cache, memory and ingestion each loaded it separately: four copies of
+the model in memory and four loads in a row when importing the API.
 """
 import asyncio
 
 from sentence_transformers import SentenceTransformer
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-# Debe coincidir con las columnas vector(384) de sql/01_init.sql.
+# Must match the vector(384) columns in sql/01_init.sql.
 EMBEDDING_DIM = 384
 
-# Se carga al importar, una sola vez, igual que el Ranker de reranker.py. Cargarlo en la
-# primera llamada trasladaría varios segundos de espera a la primera petición, y hacerlo
-# desde los hilos de asyncio.to_thread podría cargarlo dos veces a la vez.
-print(f"Cargando modelo local de embedding {EMBEDDING_MODEL} (una sola vez por proceso)...")
+# Loaded at import time, once, like the Ranker in reranker.py. Loading it on the first
+# call would move several seconds of waiting onto the first request, and doing it from
+# asyncio.to_thread threads could load it twice at once.
+print(f"Loading local embedding model {EMBEDDING_MODEL} (once per process)...")
 model = SentenceTransformer(EMBEDDING_MODEL)
 
 _get_dimension = getattr(model, "get_embedding_dimension", None) or model.get_sentence_embedding_dimension
 if _get_dimension() != EMBEDDING_DIM:
     raise RuntimeError(
-        f"{EMBEDDING_MODEL} produce vectores de {_get_dimension()} dimensiones, pero el esquema "
-        f"espera vector({EMBEDDING_DIM}). Cambiar de modelo exige migrar sql/01_init.sql."
+        f"{EMBEDDING_MODEL} produces vectors of {_get_dimension()} dimensions, but the schema "
+        f"expects vector({EMBEDDING_DIM}). Changing the model requires migrating sql/01_init.sql."
     )
 
 
 async def embed(text: str):
-    """Embedding de un texto, calculado en un hilo para no bloquear el event loop."""
+    """Embedding of a text, computed in a thread so as not to block the event loop."""
     return await asyncio.to_thread(model.encode, text)
 
 
 def to_pgvector(embedding) -> str:
-    """Literal que espera pgvector ('[x1,x2,...]'), desde un array de numpy o una lista."""
+    """The literal pgvector expects ('[x1,x2,...]'), from a numpy array or a list."""
     values = embedding.tolist() if hasattr(embedding, "tolist") else embedding
     return f"[{','.join(str(x) for x in values)}]"

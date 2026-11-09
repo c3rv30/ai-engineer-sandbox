@@ -1,27 +1,27 @@
-"""Regresión de los límites de las puntuaciones del evaluador (DOC-02).
+"""Regression of the bounds of the evaluator's scores (DOC-02).
 
-Una puntuación fuera de 0–1 debe fallar en la validación de Pydantic, donde Instructor
-reintenta, y no en el CHECK de SQL, donde la evaluación se perdía sin avisar.
+A score outside 0-1 must fail in Pydantic validation, where Instructor retries, and not
+at the SQL CHECK, where the evaluation was lost without warning.
 """
 import pytest
 from pydantic import ValidationError
 
 from src.models.evaluation import RAGEvaluation
 
-VALIDA = {
+VALID = {
     "faithfulness_score": 0.8,
     "relevance_score": 1.0,
     "context_precision_score": 0.0,
-    "reasoning": "Fiel al contexto.",
+    "reasoning": "Faithful to the context.",
 }
 
 
-def test_puntuaciones_en_rango():
-    RAGEvaluation(**VALIDA)
+def test_scores_in_range():
+    RAGEvaluation(**VALID)
 
 
-@pytest.mark.parametrize("campo", ["faithfulness_score", "relevance_score", "context_precision_score"])
-@pytest.mark.parametrize("valor", [-0.01, 1.2])
-def test_puntuacion_fuera_de_rango(campo, valor):
+@pytest.mark.parametrize("field", ["faithfulness_score", "relevance_score", "context_precision_score"])
+@pytest.mark.parametrize("value", [-0.01, 1.2])
+def test_score_out_of_range(field, value):
     with pytest.raises(ValidationError):
-        RAGEvaluation(**{**VALIDA, campo: valor})
+        RAGEvaluation(**{**VALID, field: value})

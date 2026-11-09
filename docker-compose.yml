@@ -1,34 +1,34 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    # Sin política de reinicio, un reinicio de Docker Desktop o del equipo dejaba la base
-    # parada y la API fallando con conexión rechazada en el 5433 (HYG-06). Un
-    # `docker stop` o `compose stop` manual se sigue respetando.
+    # Without a restart policy, restarting Docker Desktop or the machine left the
+    # database stopped and the API failing with connection refused on 5433 (HYG-06). A
+    # manual `docker stop` or `compose stop` is still respected.
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: postgres
-      # La lee 01_init.sql para sembrar la clave con la que las políticas RLS verifican
-      # la firma del tenant (SEC-05). Sale del .env del proyecto y es la misma que usa
-      # la aplicación; sin ella, compose se niega a arrancar en vez de crear una base
-      # con la que la aplicación no podría leer ni una fila.
-      TENANT_SIGNING_KEY: ${TENANT_SIGNING_KEY:?define TENANT_SIGNING_KEY en .env (openssl rand -hex 32)}
+      # Read by 01_init.sql to seed the key the RLS policies use to verify the tenant's
+      # signature (SEC-05). It comes from the project's .env and is the same one the
+      # application uses; without it, compose refuses to start instead of creating a
+      # database the application could not read a single row from.
+      TENANT_SIGNING_KEY: ${TENANT_SIGNING_KEY:?set TENANT_SIGNING_KEY in .env (openssl rand -hex 32)}
     ports:
       - "5433:5432"
     volumes:
-      # Sobre un volumen vacío se ejecutan los .sql de este directorio en orden
-      # alfabético; los subdirectorios (sql/migrations/) se ignoran.
+      # On an empty volume, the .sql files in this directory run in alphabetical
+      # order; subdirectories (sql/migrations/) are ignored.
       - ./sql:/docker-entrypoint-initdb.d
-      # Volumen nombrado para los datos (HYG-08). Sin esta línea, la imagen declara
-      # VOLUME sobre esta ruta y Docker creaba uno anónimo: los datos persistían en un
-      # volumen con nombre de hash, que `compose down` dejaba huérfano y el `up`
-      # siguiente sustituía por otro vacío, sin que nada fallara.
+      # Named volume for the data (HYG-08). Without this line, the image declares a
+      # VOLUME on this path and Docker created an anonymous one: the data persisted in a
+      # volume named by a hash, which `compose down` orphaned and the next `up`
+      # replaced with an empty one, without anything failing.
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      # Por TCP a propósito: mientras corren los scripts de inicialización el servidor
-      # temporal solo escucha en el socket Unix, así que 'healthy' significa que ya
-      # terminaron. Si fallan, el contenedor sale en lugar de quedar 'healthy'.
+      # Over TCP on purpose: while the init scripts run, the temporary server only
+      # listens on the Unix socket, so 'healthy' means they have finished. If they fail,
+      # the container exits instead of staying 'healthy'.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
