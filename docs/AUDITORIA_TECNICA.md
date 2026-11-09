@@ -50,6 +50,7 @@ El valor de esta auditoría no está en cuestionar el diseño sino en registrar 
 > - `HYG-08` (🟠), el 2026-09-16, al revisar el estado de Docker.
 > - `SEC-07` (🟠), el 2026-09-16, al corregir `HYG-07`.
 > - `HYG-09` (⚪), el 2026-09-17, al cerrar la capa de regresión de la API.
+> - `HYG-10` (🟠), el 2026-11-09, al verificar `HYG-01` desde un clon limpio.
 
 ### Criterios de severidad
 
@@ -107,6 +108,8 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `BUG-07` | ✅ corregido | 2026-09-16 | Suite de regresión en dos capas, planificada como cambio de OpenSpec (`regression-test-suite`). Capa 1, lógica pura: 71 tests en ~0,3 s sin BD, LLM ni `.env`. Capa 2, Postgres desechable levantado por pytest: 18 tests en ~8 s, sin tocar la base de desarrollo. Control negativo: 22 de 22 defectos reintroducidos detectados |
 | Capa de API | ✅ añadida | 2026-09-17 | Tercera capa de la suite, con dobles del grafo y de los servicios (cambio de OpenSpec `api-regression-layer`): 40 tests sin Docker que fijan `SEC-01`, `SEC-02`, `SEC-06`, `BUG-01` y `BUG-09`. Control negativo: 9 de 9. Sin cambios en producción |
 | `HYG-09` | ✅ corregido | 2026-09-17 | Telemetría de `onnxruntime` desactivada antes de importar FlashRank, en `reranker.py` y en `tests/conftest.py`. La suite completa pasa de abortar 7 de cada 8 veces a 0 de 10; mismo re-ranking antes y después |
+| `HYG-01` | 🟡 parcialmente corregido | 2026-11-09 | `pyjwt`, `numpy` y `python-multipart` declarados. Clon limpio siguiendo el README: `ModuleNotFoundError: No module named 'jwt'` → `111 passed` sin Docker. Pendiente mover `deepeval` a `dev` |
+| `HYG-10` | ✅ corregido | 2026-11-09 | Hallazgo nuevo. `.python-version` con `3.14`: `uv sync` en un clon limpio pasa de fallar con `onnxruntime` sin ruedas para 3.15 a instalar con CPython 3.14.8 |
 | Los otros 9 de la foto | ⬜ abiertos | — | — |
 | `HYG-05` | ⬜ abierto | 2026-09-14 | Hallazgo nuevo; ver §2 y el plan (§10) |
 | `SEC-07` | 🟡 capa 1 corregida | 2026-09-16 | Hallazgo nuevo, encontrado al corregir `HYG-07`. `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base. Mismo ataque con el código real: con `HEAD`, la contraseña de la víctima acaba en una tabla del atacante sin RLS; con el parche, `CREATE SCHEMA` se deniega y la escritura va a `public`. Abiertas las capas 2 y 3 (residuo de `ALTER ROLE`) |
@@ -177,8 +180,9 @@ Este documento es una foto del estado en la fecha de cabecera. Los inventarios, 
 | `HYG-08` | 🟠 | Los datos de la base viven en un volumen anónimo | `docker-compose.yml` | 5 |
 | `SEC-07` | 🟠 | `app_user` puede desviar las consultas de la aplicación a tablas propias sin RLS | `sql/00_create_app_user.sql:2` | 1 |
 | `HYG-09` | ⚪ | La telemetría de `onnxruntime` aborta el proceso al cerrar | `src/services/reranker.py:38` (vía FlashRank) | 5 |
+| `HYG-10` | 🟠 | `uv sync` elige Python 3.15 y la instalación falla | `pyproject.toml:4` | 5 |
 
-Las nueve últimas filas son posteriores a la foto (cinco del 2026-09-14, `HYG-07` del 2026-09-15, `HYG-08` y `SEC-07` del 2026-09-16, y `HYG-09` del 2026-09-17) y no entran en el recuento de §1.
+Las diez últimas filas son posteriores a la foto (cinco del 2026-09-14, `HYG-07` del 2026-09-15, `HYG-08` y `SEC-07` del 2026-09-16, `HYG-09` del 2026-09-17 y `HYG-10` del 2026-11-09) y no entran en el recuento de §1.
 
 ---
 
@@ -2755,6 +2759,8 @@ grep -rn "^import jwt\|^import numpy\|import numpy as np" src/
 
 **Ya no es solo un riesgo (comprobado el 2026-09-16).** `pyjwt` no figura ni en `pyproject.toml` ni en `uv.lock`, y `uv sync`, que el README manda ejecutar, deja el entorno exactamente como dice el lockfile. `uv sync --dry-run` sobre el `.venv` del proyecto: *"Would uninstall 10 packages"*, entre ellos `pyjwt==2.13.0`, que importa `src/api/auth.py:9`. Así que seguir el README desde un clon limpio produce una API que no arranca. `uv run` no lo sufre, porque sincroniza sin desinstalar lo que sobra. Por eso `BUG-07` movió `pytest` al grupo `dev` con `uv add --dev --no-sync` y la suite se ejecuta con `uv run pytest`. `pytest-asyncio` ya está declarado.
 
+**Estado:** 🟡 parcialmente corregido el 2026-11-09, antes de publicar el repositorio. `pyjwt>=2.13.0`, `numpy>=2.5.2` y `python-multipart>=0.0.32` quedan declarados (con `uv add --no-sync`). Verificado desde un clon limpio, siguiendo el README con `uv sync`: antes, `import jwt` falla y `tests/api` no llega a recogerse (`ModuleNotFoundError: No module named 'jwt'`); después, `pyjwt` 2.15.1 se instala, sobrevive a un segundo `uv sync` y `uv run pytest -m "not db"` da `111 passed`. Sigue abierto mover `deepeval` al grupo `dev`. Al hacer esta verificación salió `HYG-10`.
+
 **Nota sobre los pines sin commitear.** El diff pendiente en el árbol de trabajo fija tres versiones exactas (`anthropic==1.4.0`, `deepeval==4.2.1`, `streamlit==1.63.0`) donde antes había rangos. Fijar es defendible para reproducibilidad, pero conviene que sea una decisión consciente y documentada, no un residuo de depuración — y `uv.lock` ya garantiza la reproducibilidad exacta por sí solo.
 
 ---
@@ -3112,6 +3118,28 @@ Desactivarla antes reduce la ventana, no la cierra: cuanto antes se haga, más t
 
 ---
 
+### `HYG-10` 🟠 `uv sync` elige Python 3.15 y la instalación falla
+
+> Posterior a la foto: encontrado el 2026-11-09, al verificar `HYG-01` desde un clon limpio antes de publicar el repositorio.
+
+**Ubicación.** `pyproject.toml:4` (`requires-python = ">=3.14"`), sin `.python-version` en el repositorio.
+
+**Análisis.** Sin un `.python-version`, `uv` toma el intérprete más nuevo que cumple `>=3.14`. En una máquina que tenga 3.15, ese es 3.15, y `onnxruntime` (llega con FlashRank) no publica ruedas para él. El paso 1 del README falla para cualquiera que tenga 3.15 instalado, aunque el README pida 3.14.
+
+**Evidencia.** `uv sync` en un clon limpio:
+
+```
+error: Distribution `onnxruntime==1.29.0 @ registry+https://pypi.org/simple` can't be installed
+because it doesn't have a source distribution or wheel for the current platform
+
+hint: You're using CPython 3.15 (`cp315`), but `onnxruntime` (v1.29.0) only has wheels with
+the following Python ABI tags: `cp314`, `cp314t`
+```
+
+**Estado:** ✅ corregido el 2026-11-09. `.python-version` con `3.14`. En el mismo clon, `uv sync` usa CPython 3.14.8 y termina sin error; con `HYG-01` corregido, la suite sin Docker da `111 passed`. Se deja `requires-python` como está: el problema es qué intérprete se elige, no cuáles se admiten.
+
+---
+
 ## 9. Traza End-to-End Anotada
 
 Recorrido de una consulta real por el sistema, señalando dónde se activa cada hallazgo. Escenario: usuario autenticado como `bryan` envía *"¿Y en qué años trabajó con eso?"* como **segunda** pregunta de la conversación, tras haber preguntado por AWS.
@@ -3178,6 +3206,7 @@ Los hallazgos posteriores a la foto, con el bloque en que encajan:
 | 33 | ✅ hecho (2026-09-16). `restart: unless-stopped` en el servicio `postgres` | `HYG-06` | 5 | 2 min |
 | 36 | 🟡 capa 1 hecha (2026-09-16): `GRANT CONNECT` en lugar de `GRANT ALL` sobre la base, y migración para la existente. Pendiente decidir si se neutraliza `search_path` en la aplicación y se vigila `pg_db_role_setting` (junto a `BUG-07`) | `SEC-07` | 1 | 20 min (capa 1) |
 | 37 | ✅ hecho (2026-09-17). `disable_telemetry_events()` antes de importar FlashRank, en `reranker.py` y en los tests | `HYG-09` | 5 | 5 min |
+| 38 | ✅ hecho (2026-11-09). `.python-version` con `3.14` | `HYG-10` | 5 | 2 min |
 | D-01, D-02 | Limpiezas de datos pendientes de decisión (tabla de §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
 Las comprobaciones de las correcciones de los bloques 0 a 2 se ejecutaron desde scripts fuera del repositorio: controles negativos contra el servidor real y casos directos de ruteo, ventana de recuperación, política de caché y validación. Lo que tienen de reproducible está en la línea de estado de cada hallazgo y en el mensaje de su commit. Convertir en tests versionados los casos que no necesitan base de datos ni LLM es parte del paso 28 (`BUG-07`). Hecho el 2026-09-16: desde entonces, la mayoría viven en `tests/unit/` y `tests/db/`.
@@ -3243,7 +3272,7 @@ El paso 12 debe hacerse **junto** a la corrección de `SEC-02`: con pool, `SET a
 
 | # | Acción | Hallazgo |
 |:---:|---|---|
-| 24 | Declarar `pyjwt`, `numpy`, `python-multipart`; mover `deepeval`/`pytest` a `dev`; añadir `pytest-asyncio` | `HYG-01` |
+| 24 | 🟡 en parte (2026-11-09): declarados `pyjwt`, `numpy` y `python-multipart`; `pytest` y `pytest-asyncio` ya están en `dev`. Falta mover `deepeval` a `dev` | `HYG-01` |
 | 25 | Borrar los 9 archivos muertos y `IngestRequest` | `HYG-02` |
 | 26 | Ampliar `.gitignore`; `git rm --cached .idea uvicorn.log` | `HYG-03` |
 | 27 | `datetime.now(timezone.utc)` | `HYG-04` |
