@@ -53,7 +53,7 @@ flowchart TD
     Q[User Message] --> Router[FastAPI API]
     
     %% Answer flow (synchronous)
-    Router --> RetrieveMemory[Retrieve Facts (Vector Search)]
+    Router --> RetrieveMemory["Retrieve Facts (Vector Search)"]
     RetrieveMemory --> DB[(Postgres user_memory)]
     DB --> |Top 3 Facts > 0.3 Similarity| Profile[XML Semantic Profile]
     Profile --> LLM[Claude: generate_answer]
@@ -61,7 +61,7 @@ flowchart TD
     
     %% Extraction flow (asynchronous, in the background)
     Router -.-> |BackgroundTasks| Extractor[Memory Extractor]
-    Extractor --> Haiku[Claude Haiku (Instructor)]
+    Extractor --> Haiku["Claude Haiku (Instructor)"]
     Haiku --> |Extracts: Pydantic ExtractedFacts| Vec[Embed New Facts]
     Vec --> InsertDB[(Insert Postgres user_memory)]
 
