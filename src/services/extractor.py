@@ -35,14 +35,14 @@ def _build_prompt(
 
     history_str = format_history(history)
 
+    # The language rule goes after the Context on purpose: placed before a long
+    # Spanish context, an English question was answered in Spanish.
     return f"""
     You are an expert AI Engineering assistant. Your goal is to answer the user's question using ONLY the information provided in the Context.
     If the information is not enough, say so in 'requires_more_info'.
     Cite the sources using the document ID.
 
     VERY IMPORTANT: You must return your answer structured. If you are going to write a long analysis, put all the text, formatted in Markdown, inside the 'answer' field. Do not answer with plain text outside the JSON schema.
-
-    LANGUAGE: Write 'answer' in the same language as the user's Question, even if the Context is in another language. Translate what you take from the Context; keep proper nouns, company names and technology names as they are.
 
     {user_profile}
 
@@ -53,6 +53,8 @@ def _build_prompt(
 
     Context:
     {context_text}
+
+    LANGUAGE: Write 'answer' in the same language as the Question above ("{query}"), even though the Context may be in another language. Translate what you take from the Context; keep proper nouns, company names and technology names as they are.
     """
 
 
