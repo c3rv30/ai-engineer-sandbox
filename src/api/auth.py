@@ -2,13 +2,13 @@ import os
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
-from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, ValidationError
 import jwt
 
-load_dotenv()
+import src.config  # noqa: F401  (loads .env before SECRET_KEY is read)
+
 
 # HS256 is symmetric: whoever knows this key can issue valid tokens for any tenant,
 # and Postgres RLS isolation stops having any effect.

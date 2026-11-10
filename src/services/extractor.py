@@ -5,6 +5,7 @@ from anthropic import AsyncAnthropic
 from instructor import Partial
 from langfuse import observe
 
+import src.config  # noqa: F401  (loads .env before the client is built)
 from src.models.search import RerankedResult
 from src.models.structured import StructuredAnswer
 from src.services.history import format_history

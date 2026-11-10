@@ -5,11 +5,9 @@ from typing import List, Dict
 from pydantic import BaseModel
 import instructor
 from anthropic import AsyncAnthropic
-from dotenv import load_dotenv
-
+import src.config  # noqa: F401  (loads .env before the client is built)
 from src.services.db import tenant_connection
 
-load_dotenv()
 
 class Triplet(BaseModel):
     source_node: str

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
 from langfuse import observe
 
+import src.config  # noqa: F401  (loads .env before the client is built)
 from src.services.history import format_history
 
 # Patch the Anthropic client with Instructor

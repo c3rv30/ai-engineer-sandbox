@@ -11,11 +11,9 @@ import tiktoken
 import fitz  # PyMuPDF
 from anthropic import AsyncAnthropic
 from langfuse import observe
-from dotenv import load_dotenv
-
+import src.config  # noqa: F401  (loads .env before the client is built)
 from src.services.embeddings import EMBEDDING_MODEL, encode, to_pgvector
 
-load_dotenv()
 
 
 class DocumentChunk(BaseModel):

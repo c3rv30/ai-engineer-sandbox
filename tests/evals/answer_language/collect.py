@@ -117,8 +117,8 @@ def main(argv=None) -> int:
     if args.out.exists():
         sys.exit(f"{args.out} already exists; pick another name so no paid answers are overwritten.")
 
-    # The .env before any import of src: router.py and evaluator.py create their
-    # Anthropic client at import time without calling load_dotenv().
+    # The .env before any import of src: since HYG-05, src/config.py loads it, but a
+    # --code-root from before that fix builds its Anthropic clients without a key.
     from dotenv import load_dotenv
     load_dotenv(REPO / ".env")
     sys.path.insert(0, str(args.code_root))

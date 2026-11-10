@@ -4,6 +4,8 @@ import asyncio
 import instructor
 from typing import List, Optional
 from anthropic import AsyncAnthropic
+
+import src.config  # noqa: F401  (loads .env before the client is built)
 from src.models.evaluation import RAGEvaluation
 from src.models.search import SearchResult
 from src.services.db import tenant_connection

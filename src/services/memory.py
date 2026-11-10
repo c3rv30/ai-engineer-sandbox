@@ -3,12 +3,10 @@ import uuid
 import instructor
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
-from dotenv import load_dotenv
-
+import src.config  # noqa: F401  (loads .env before the client is built)
 from src.services.db import tenant_connection
 from src.services.embeddings import embed, to_pgvector
 
-load_dotenv()
 
 client = instructor.from_anthropic(AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY")))
 

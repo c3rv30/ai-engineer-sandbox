@@ -1,10 +1,9 @@
 import uuid
 import json
 from typing import List
-from dotenv import load_dotenv
-load_dotenv()
-
 from langfuse import observe
+
+import src.config  # noqa: F401  (loads .env)
 from src.models.search import SearchResult
 from src.services.db import tenant_connection
 from src.services.embeddings import embed, to_pgvector
