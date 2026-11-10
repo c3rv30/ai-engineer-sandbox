@@ -1,0 +1,37 @@
+{
+  "description": "Answer language eval (BUG-11). Eight questions asked in both languages, leaning toward broad ones that pull a long Spanish context, plus two follow-ups per language whose history is in the other language. 'language' is the language the answer is expected in.",
+  "questions": [
+    {"id": "experience-summary-es", "language": "es", "query": "Resume su experiencia profesional completa, empresa por empresa.", "history": []},
+    {"id": "experience-summary-en", "language": "en", "query": "Summarize his full professional experience, company by company.", "history": []},
+    {"id": "betterfly-es", "language": "es", "query": "¿Qué hizo en Betterfly?", "history": []},
+    {"id": "betterfly-en", "language": "en", "query": "What did he do at Betterfly?", "history": []},
+    {"id": "aws-services-es", "language": "es", "query": "¿Con qué servicios de AWS ha trabajado y en qué empresas?", "history": []},
+    {"id": "aws-services-en", "language": "en", "query": "Which AWS services has he worked with, and at which companies?", "history": []},
+    {"id": "itau-years-es", "language": "es", "query": "¿Qué hizo en Itaú/Kabeli y en qué años?", "history": []},
+    {"id": "itau-years-en", "language": "en", "query": "What did he do at Itaú/Kabeli, and in which years?", "history": []},
+    {"id": "leadership-es", "language": "es", "query": "¿Qué experiencia tiene liderando equipos de desarrollo?", "history": []},
+    {"id": "leadership-en", "language": "en", "query": "What experience does he have leading development teams?", "history": []},
+    {"id": "education-es", "language": "es", "query": "¿Qué estudios y certificaciones tiene?", "history": []},
+    {"id": "education-en", "language": "en", "query": "What education and certifications does he have?", "history": []},
+    {"id": "mobile-es", "language": "es", "query": "¿Qué experiencia tiene en desarrollo móvil?", "history": []},
+    {"id": "mobile-en", "language": "en", "query": "What mobile development experience does he have?", "history": []},
+    {"id": "backend-skills-es", "language": "es", "query": "¿Cuáles son sus principales habilidades técnicas de backend y en qué proyectos las aplicó?", "history": []},
+    {"id": "backend-skills-en", "language": "en", "query": "What are his main backend technical skills, and in which projects did he apply them?", "history": []},
+    {"id": "followup-built-en", "language": "en", "query": "And what did he build there?", "history": [
+      {"role": "user", "content": "¿Dónde trabaja actualmente Bryan?"},
+      {"role": "assistant", "content": "Bryan trabaja actualmente en Betterfly como Ingeniero de Software Senior de backend, desde abril de 2024."}
+    ]},
+    {"id": "followup-before-en", "language": "en", "query": "And before that job, where did he work and what did he do?", "history": [
+      {"role": "user", "content": "¿En qué empresa trabaja Bryan hoy?"},
+      {"role": "assistant", "content": "Hoy trabaja en Betterfly, donde es Ingeniero de Software Senior en el equipo de backend desde abril de 2024."}
+    ]},
+    {"id": "followup-built-es", "language": "es", "query": "¿Y qué construyó ahí?", "history": [
+      {"role": "user", "content": "Where does Bryan work now?"},
+      {"role": "assistant", "content": "Bryan currently works at Betterfly as a Senior Backend Software Engineer, since April 2024."}
+    ]},
+    {"id": "followup-certifications-es", "language": "es", "query": "¿Y qué certificaciones tiene además de eso?", "history": [
+      {"role": "user", "content": "What did Bryan study?"},
+      {"role": "assistant", "content": "He studied Computer Engineering at INACAP between 2009 and 2015, and he is taking a diploma in Artificial Intelligence at Universidad Católica."}
+    ]}
+  ]
+}

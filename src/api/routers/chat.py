@@ -10,6 +10,7 @@ from src.models.structured import StructuredAnswer
 from src.api.auth import get_current_user, User
 from src.services.cache import check_semantic_cache, save_semantic_cache
 from src.services.cache_policy import is_cacheable, is_cache_eligible, uses_default_retrieval
+from src.services.language import LanguageCheck, check_answer_language
 from src.services.memory import retrieve_user_facts, extract_and_save_facts
 
 from src.services.evaluator import evaluate_rag_response
@@ -24,6 +25,28 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 # server paths and Anthropic SDK messages. It goes to the log, and the client only gets
 # an identifier to correlate it with.
 logger = logging.getLogger(__name__)
+
+
+def check_language(intent_type, answer_language, answer_text) -> LanguageCheck:
+    """Checks the final answer against the supervisor's decision (BUG-11).
+
+    It is a signal, never a gate: the client already has the answer (in streaming, every
+    event was sent), so a mismatch is logged and kept out of the cache, and nothing else.
+    A tool answer is not checked: its text is a fixed English template. Nor may the
+    check itself break the request: if the detector fails, the language is unknown.
+    """
+    expected = answer_language or None
+    if intent_type == "tool_execution":
+        return LanguageCheck(expected=expected, detected=None)
+    try:
+        check = check_answer_language(expected, answer_text)
+    except Exception:
+        logger.exception("Answer language check failed")
+        return LanguageCheck(expected=expected, detected=None)
+    if check.mismatch:
+        logger.warning("Answer language mismatch: expected=%s detected=%s intent=%s",
+                       check.expected, check.detected, intent_type)
+    return check
 
 
 # The graph is built once (it is thread-safe)
@@ -51,6 +74,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
             top_k_retrieve=request.top_k_retrieve,
             top_k_rerank=request.top_k_rerank,
             intent_type="",
+            answer_language="",
             search_queries=[],
             documents=[],
             final_answer=None,
@@ -67,13 +91,17 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks,
 
         # 5. Post-response tasks
         response_dict = structured_response.model_dump()
-        if use_cache and is_cacheable(final_state.get("intent_type"), response_dict):
+        language = check_language(final_state.get("intent_type"), final_state.get("answer_language"),
+                                  structured_response.answer)
+        if use_cache and is_cacheable(final_state.get("intent_type"), response_dict,
+                                      language_mismatch=language.mismatch):
             await save_semantic_cache(current_user.tenant_id, request.query, response_dict)
         background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
 
         # RAG evaluation in the background
         if final_state.get("documents"):
-            background_tasks.add_task(evaluate_rag_response, current_user.tenant_id, request.query, structured_response.answer, final_state["documents"])
+            background_tasks.add_task(evaluate_rag_response, current_user.tenant_id, request.query, structured_response.answer, final_state["documents"],
+                                      expected_language=language.expected, detected_language=language.detected)
 
         return structured_response
 
@@ -114,6 +142,7 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                 top_k_retrieve=request.top_k_retrieve,
                 top_k_rerank=request.top_k_rerank,
                 intent_type="",
+                answer_language="",
                 search_queries=[],
                 documents=[],
                 final_answer=None,
@@ -126,6 +155,7 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
             # carries per-node progress and the final state.
             final_dict = None
             intent_type = None
+            answer_language = None
             accumulated_answer = ""
             retrieved_docs = []
             async for mode, chunk in agent_graph.astream(initial_state, stream_mode=["updates", "custom"]):
@@ -137,6 +167,8 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                 for node_name, state_update in chunk.items():
                     if state_update and state_update.get("intent_type"):
                         intent_type = state_update["intent_type"]
+                    if state_update and state_update.get("answer_language"):
+                        answer_language = state_update["answer_language"]
                     if node_name == "supervisor":
                         accumulated_answer += "🤖 *Supervisor choosing a strategy...*\n\n"
                         yield f"data: {json.dumps({'answer': accumulated_answer, 'sources': []})}\n\n"
@@ -163,12 +195,16 @@ async def chat_stream_endpoint(request: ChatRequest, background_tasks: Backgroun
                         stream_dict = {**final_dict, "answer": accumulated_answer}
                         yield f"data: {json.dumps(stream_dict)}\n\n"
 
-            if final_dict and use_cache and is_cacheable(intent_type, final_dict):
+            # After the last event: the check cannot change what the client got. On the
+            # clean answer, never on the accumulated text with the progress messages.
+            language = check_language(intent_type, answer_language, (final_dict or {}).get("answer"))
+            if final_dict and use_cache and is_cacheable(intent_type, final_dict, language_mismatch=language.mismatch):
                 await save_semantic_cache(current_user.tenant_id, request.query, final_dict)
             background_tasks.add_task(extract_and_save_facts, current_user.tenant_id, request.query)
 
             if retrieved_docs and final_dict:
-                background_tasks.add_task(evaluate_rag_response, current_user.tenant_id, request.query, final_dict.get("answer", ""), retrieved_docs)
+                background_tasks.add_task(evaluate_rag_response, current_user.tenant_id, request.query, final_dict.get("answer", ""), retrieved_docs,
+                                          expected_language=language.expected, detected_language=language.detected)
 
         except Exception:
             # The 'error' key is kept: it is the one the frontend renders.

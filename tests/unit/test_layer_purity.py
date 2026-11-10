@@ -17,6 +17,7 @@ PURE_MODULES = [
     "src.services.agent_graph.routing",
     "src.services.history",
     "src.services.filenames",
+    "src.services.language",
     "src.services.db",
     "src.models.requests",
     "src.models.evaluation",

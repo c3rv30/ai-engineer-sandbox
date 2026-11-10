@@ -12,6 +12,7 @@ dependencies = [
     "langchain-core>=1.6.2",
     "langfuse>=4.15.1",
     "langgraph>=1.2.11",
+    "lingua-language-detector==2.2.0",
     "numpy>=2.5.2",
     "pillow>=12.3.0",
     "pydantic>=2.13.5",

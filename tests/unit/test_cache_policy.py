@@ -42,6 +42,18 @@ def test_confidence_at_the_threshold():
     assert is_cacheable("knowledge_search", {"requires_more_info": False, "confidence_score": 0.5})
 
 
+# --- BUG-11: answer in the wrong language ---
+
+@pytest.mark.parametrize("intent", ["knowledge_search", "casual_greeting"])
+def test_answer_in_the_wrong_language(intent):
+    # Cached, it would be served to every similar question.
+    assert not is_cacheable(intent, GOOD, language_mismatch=True)
+
+
+def test_matching_or_undetermined_language_does_not_prevent_caching():
+    assert is_cacheable("knowledge_search", GOOD, language_mismatch=False)
+
+
 # --- BUG-06: custom retrieval parameters ---
 
 def test_default_parameters_use_the_cache():

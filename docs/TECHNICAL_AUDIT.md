@@ -53,6 +53,7 @@ The value of this audit is not in questioning the design but in recording three 
 > - `SEC-07` (🟠), on 2026-09-16, while fixing `HYG-07`.
 > - `HYG-09` (⚪), on 2026-09-17, while closing the API regression layer.
 > - `HYG-10` (🟠), on 2026-11-09, while verifying `HYG-01` from a clean clone.
+> - `BUG-11` (🟡), on 2026-11-09, while running the English prompts end to end after translating the repository.
 > - `BUG-12` (🟠), on 2026-11-10, while preparing the measurement of the answer language change (`BUG-11`).
 
 ### Severity criteria
@@ -113,6 +114,7 @@ This document is a snapshot of the state on the date in the header. The inventor
 | `HYG-09` | ✅ fixed | 2026-09-17 | `onnxruntime` telemetry disabled before importing FlashRank, in `reranker.py` and in `tests/conftest.py`. The full suite goes from aborting 7 of every 8 times to 0 of 10; same re-ranking before and after |
 | `HYG-01` | 🟡 partly fixed | 2026-11-09 | `pyjwt`, `numpy` and `python-multipart` declared. Clean clone following the README: `ModuleNotFoundError: No module named 'jwt'` → `111 passed` without Docker. Moving `deepeval` to `dev` is pending |
 | `HYG-10` | ✅ fixed | 2026-11-09 | New finding. `.python-version` with `3.14`: `uv sync` on a clean clone goes from failing with `onnxruntime` having no wheels for 3.15 to installing with CPython 3.14.8 |
+| `BUG-11` | ✅ fixed | 2026-11-10 | New finding, planned as an OpenSpec change (`supervisor-answer-language`). The supervisor decides the language and the generator gets an order; a mismatch is logged, not cached and stored with the evaluation. Eval of 100 answers per variant: 100% in the question's language **before and after** (Wilson 95% [92.9%, 100%] per language), so no measurable improvement: the guard and the measurement are what is new |
 | `BUG-12` | ✅ fixed | 2026-11-10 | New finding. One lock around `model.encode`. Four simultaneous first requests to a freshly started API: before, the server hung (4 timeouts at 90 s) or died (exit 133), in 2 of 2 starts; after, 4 × 200 in 2 of 2. Four concurrent cold `embed()` calls: 0 of 5 → 10 of 10 |
 | The other 9 from the snapshot | ⬜ open | — | — |
 | `HYG-05` | ⬜ open | 2026-09-14 | New finding; see §2 and the plan (§10) |
@@ -186,9 +188,10 @@ This document is a snapshot of the state on the date in the header. The inventor
 | `SEC-07` | 🟠 | `app_user` can divert the application's queries to its own tables without RLS | `sql/00_create_app_user.sql:2` | 1 |
 | `HYG-09` | ⚪ | `onnxruntime` telemetry aborts the process on shutdown | `src/services/reranker.py:38` (through FlashRank) | 5 |
 | `HYG-10` | 🟠 | `uv sync` picks Python 3.15 and the install fails | `pyproject.toml:4` | 5 |
+| `BUG-11` | 🟡 | The generator works out the answer language itself, and nothing checks it | `src/services/extractor.py:57` | 2 |
 | `BUG-12` | 🟠 | Concurrent first embeddings hang or crash the process | `src/services/embeddings.py:28` | 2 |
 
-The last eleven rows came after the snapshot (five from 2026-09-14, `HYG-07` from 2026-09-15, `HYG-08` and `SEC-07` from 2026-09-16, `HYG-09` from 2026-09-17, `HYG-10` from 2026-11-09 and `BUG-12` from 2026-11-10) and are not part of the count in §1.
+The last twelve rows came after the snapshot (five from 2026-09-14, `HYG-07` from 2026-09-15, `HYG-08` and `SEC-07` from 2026-09-16, `HYG-09` from 2026-09-17, `HYG-10` and `BUG-11` from 2026-11-09 and `BUG-12` from 2026-11-10) and are not part of the count in §1.
 
 ---
 
@@ -1778,6 +1781,37 @@ B's turn 2 answer was **byte for byte** A's, with a `✅ Cache Hit` in the serve
 
 ---
 
+### `BUG-11` 🟡 The generator works out the answer language itself, and nothing checks it
+
+> After the snapshot: found on 2026-11-09, in the first end-to-end run of the English prompts, when *"What cloud technologies has Bryan used?"* was answered in Spanish over `/chat/stream/`.
+
+**Location.** `src/services/extractor.py:57` at `9a08bff`: *"Write 'answer' in the same language as the Question above"*. Nothing after the generator looked at the language of the answer.
+
+**Analysis.** The rule leaves the generator to work out the language, and the context it reads right before is long and in Spanish (the whole corpus is). When it gets it wrong, nothing notices: the answer is cached and served to every similar question, and no metric or log line records it. The measurements before this finding were too small to say anything: 8 of 9 English answers with the code from before the translation (one *"Cloud Technologies utilizadas por…"*), 9 of 9 once the rule moved after the context (`fef8f31`).
+
+**Patch.** Planned and applied as the OpenSpec change `supervisor-answer-language`:
+- The supervisor, which already reads the question to route it, decides `answer_language` (`es` or `en`, a required field of `QueryIntent`), and it travels in `AgentState`. Its own direct answers follow it.
+- The generator gets an order (*"Write 'answer' in English, even if the Question or the Context is in another language"*) instead of the relative rule.
+- After the graph, both endpoints detect the answer's language with `lingua` (`src/services/language.py`, Spanish and English only). A mismatch is logged as a warning and not cached, and the background evaluator stores both languages in two new nullable columns of `rag_evaluations` (`sql/migrations/apply_answer_language.sql`). The answer is never rejected: in streaming it has already reached the client.
+- A language eval (`tests/evals/answer_language/`): 20 questions, 8 asked in both languages plus 2 follow-ups per language whose history is in the other one, 5 repetitions each, through the real graph. Collecting and scoring are separate, so the code before the change is measured from a `git worktree`.
+
+**Measurement.** 100 answers per variant, tenant `1111…`, default `top_k`, 403 LLM calls (3 retries of the reviewer in 200 answers, 0 errors); the development database ended as it started (22/128/4/3/0). "Before" is `9a08bff` (the branch point, with `BUG-12` fixed so that it could run), "after" is the branch:
+
+| Language | Before | After | Verdict |
+|---|---|---|---|
+| es | 50/50, 100% [92.9%, 100%] | 50/50, 100% [92.9%, 100%] | no evidence of improvement |
+| en | 50/50, 100% [92.9%, 100%] | 50/50, 100% [92.9%, 100%] | no evidence of improvement |
+
+The supervisor's decision matched the question's language in 100 of 100 answers, including the 20 answers to follow-ups whose history is in the other language.
+
+**What the measurement says.** The wrong-language answer did not appear in 100 answers of the code before the change either, so this change could not have shown an improvement in the rate: after `fef8f31`, the defect occurs in fewer than ~7% of answers per language, if at all (the upper bound of the interval). The value of the change is elsewhere: the language is now a decision that can be read in the state and tested, and a mismatch, should it happen, no longer goes unnoticed or gets cached.
+
+**The detector needed calibrating.** Judging the whole text at once, it took 3 of the 200 answers for Spanish, all in English and all to *"What education and certifications does he have?"*: they keep the Spanish names of the degrees (*"Diplomado en Inteligencia Artificial (Diploma in Artificial Intelligence)"*), as the order asks. No threshold could fix it, because its confidences come out at 0.0 or 1.0. It now counts the letters of each language's segments, and the winner must cover at least 60% of them (in the 200 answers the right language never covered less than 62%). Read by hand, all 200 answers are in the expected language, and the detector now agrees on all of them. A check costs ~5 ms, and ~50 ms the first time in a process; the process footprint does not change beyond the noise between runs (±10 MB on ~1.66 GB), so the detector is not warmed up at startup.
+
+**Status:** ✅ fixed on 2026-11-10. End to end against a real uvicorn, with `top_k_rerank=9`: an English question over the Spanish corpus on `/chat/` and another on `/chat/stream/` were both answered in English, no mismatch was logged, and each left a row in `rag_evaluations` with `expected_language=en` and `detected_language=en` (both rows deleted afterwards). Regression tests in `tests/unit/test_language.py`, `tests/unit/test_cache_policy.py`, `tests/api/test_answer_language.py` and `tests/db/test_evaluation_language.py`, each with its negative control.
+
+---
+
 ### `BUG-12` 🟠 Concurrent first embeddings hang or crash the process
 
 > After the snapshot: found on 2026-11-10, when the first run of the answer language eval (`BUG-11`) died with a segfault (exit 139) inside the researcher.
@@ -3241,6 +3275,7 @@ The findings after the snapshot, with the block they fit in:
 | 37 | ✅ done (2026-09-17). `disable_telemetry_events()` before importing FlashRank, in `reranker.py` and in the tests | `HYG-09` | 5 | 5 min |
 | 38 | ✅ done (2026-11-09). `.python-version` with `3.14` | `HYG-10` | 5 | 2 min |
 | 39 | ✅ done (2026-11-10). One `threading.Lock` around every `model.encode` of the process | `BUG-12` | 2 | 15 min |
+| 40 | ✅ done (2026-11-10). The supervisor decides `answer_language`, the generator gets an order, and a mismatch is logged, not cached and stored with the evaluation; a language eval with 100 answers per variant | `BUG-11` | 2 | 1 day |
 | D-01, D-02 | Data cleanups pending a decision (table in §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
 The checks for the fixes of blocks 0 to 2 ran from scripts outside the repository: negative controls against the real server and direct cases for routing, retrieval window, cache policy and validation. What is reproducible about them is in each finding's status line and in its commit message. Turning the cases that need neither a database nor an LLM into versioned tests is part of step 28 (`BUG-07`). Done on 2026-09-16: since then, most of them live in `tests/unit/` and `tests/db/`.

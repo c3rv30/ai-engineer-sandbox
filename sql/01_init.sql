@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS rag_evaluations (
     relevance_score FLOAT CHECK (relevance_score >= 0.0 AND relevance_score <= 1.0),
     context_precision_score FLOAT CHECK (context_precision_score >= 0.0 AND context_precision_score <= 1.0),
     reasoning TEXT,
+    -- Language the supervisor decided and language detected in the answer (BUG-11).
+    -- NULL for rows from before and for an answer whose language could not be told.
+    expected_language TEXT CHECK (expected_language IN ('es', 'en')),
+    detected_language TEXT CHECK (detected_language IN ('es', 'en')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS evaluations_tenant_idx ON rag_evaluations(tenant_id);

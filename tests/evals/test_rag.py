@@ -29,7 +29,8 @@ async def test_rag_contextual_relevancy_and_faithfulness():
     best_results = await rerank_documents(query, vector_candidates, top_k=3)
     
     # 2. Generate the answer
-    structured_response = await generate_answer(query, best_results)
+    # The question is in English; without the graph, no supervisor decides it (BUG-11).
+    structured_response = await generate_answer(query, best_results, "en")
     
     # 3. Format for DeepEval
     retrieval_context = [doc.content for doc in best_results]

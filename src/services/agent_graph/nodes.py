@@ -30,6 +30,7 @@ async def supervisor_node(state: AgentState) -> dict:
     if intent.intent_type in ["casual_greeting", "out_of_scope"]:
         return {
             "intent_type": intent.intent_type,
+            "answer_language": intent.answer_language,
             "final_answer": StructuredAnswer(
                 answer=intent.direct_answer,
                 sources=[],
@@ -50,6 +51,7 @@ async def supervisor_node(state: AgentState) -> dict:
             
         return {
             "intent_type": "tool_execution",
+            "answer_language": intent.answer_language,
             "final_answer": StructuredAnswer(
                 answer=ans,
                 sources=[],
@@ -60,6 +62,7 @@ async def supervisor_node(state: AgentState) -> dict:
         
     return {
         "intent_type": intent.intent_type,
+        "answer_language": intent.answer_language,
         "search_queries": queries,
         "iterations": state.get("iterations", 0)
     }
@@ -132,6 +135,8 @@ async def generator_node(state: AgentState) -> dict:
     kwargs = dict(
         query=state["query"],
         context=state["documents"],
+        # The supervisor's decision; a retry of the loop reuses it (BUG-11).
+        answer_language=state["answer_language"],
         user_profile=state["user_profile"],
         history=state.get("history", [])
     )

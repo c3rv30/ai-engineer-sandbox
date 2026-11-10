@@ -15,9 +15,12 @@ CACHEABLE_INTENTS = {"knowledge_search", "casual_greeting"}
 MIN_CACHE_CONFIDENCE = 0.5
 
 
-def is_cacheable(intent_type: str | None, answer: dict) -> bool:
-    # Nor is an answer the system itself considers insufficient kept forever.
+def is_cacheable(intent_type: str | None, answer: dict, *, language_mismatch: bool = False) -> bool:
+    # Nor is an answer the system itself considers insufficient kept forever. Nor one in
+    # the wrong language, which every similar question would get again (BUG-11). The
+    # endpoint detects the language; the policy only decides.
     return (intent_type in CACHEABLE_INTENTS
+            and not language_mismatch
             and not answer.get("requires_more_info")
             and (answer.get("confidence_score") or 0) >= MIN_CACHE_CONFIDENCE)
 
