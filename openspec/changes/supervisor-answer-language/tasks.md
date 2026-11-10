@@ -28,8 +28,8 @@
 
 ## 5. Language eval runner
 
-- [ ] 5.1 Write `tests/evals/answer_language/questions.json` (D9): 8 matched pairs and 2 follow-ups per language with history in the other language, each labeled with its expected language; verify with a unit test that the set has at least 10 questions per language and at least 2 cross-language follow-ups
-- [ ] 5.2 Write `tests/evals/answer_language/score.py`: counts per language, Wilson 95% interval, no rate when there is nothing to score, supervisor accuracy when present, a list of questions with mismatches, and the `--baseline` comparison rule. Verify with `tests/unit/test_language_eval_score.py` on synthetic JSONL, which covers overlapping intervals, a regression and a language with only errors
+- [x] 5.1 Write `tests/evals/answer_language/questions.json` (D9): 8 matched pairs and 2 follow-ups per language with history in the other language, each labeled with its expected language; verify with a unit test that the set has at least 10 questions per language and at least 2 cross-language follow-ups
+- [x] 5.2 Write `tests/evals/answer_language/score.py`: counts per language, Wilson 95% interval, no rate when there is nothing to score, supervisor accuracy when present, a list of questions with mismatches, and the `--baseline` comparison rule. Verify with `tests/unit/test_language_eval_score.py` on synthetic JSONL, which covers overlapping intervals, a regression and a language with only errors
 - [ ] 5.3 Write `tests/evals/answer_language/collect.py` (D8): `--code-root`, `--tenant`, `--repeats`, `--concurrency`, `--top-k-rerank` and `--out`; the main repository's `.env` is loaded before any `src` import; the runner prints which database it uses and refuses port 5439; each JSONL line records the `HEAD` of `--code-root`. Verify with `--repeats 1` on two questions once the environment from group 6 exists, and check that `uv run pytest --run-evals --collect-only` does not collect anything from that directory
 - [ ] 5.4 Document how to run the eval, including the cost per run and the worktree step, in a short `tests/evals/answer_language/README.md`; verify that the documented commands run as written
 
