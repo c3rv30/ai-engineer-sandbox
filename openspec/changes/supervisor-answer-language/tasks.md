@@ -1,9 +1,9 @@
 ## 1. Language detector and instruction
 
-- [ ] 1.1 Add `lingua-language-detector==2.2.0` as a runtime dependency with `uv add`; verify that `uv run --no-sync python -c "import lingua"` works and that `uv run pytest -m "not db"` still collects the same number of tests as before
-- [ ] 1.2 Write `src/services/language.py` (D4): supported codes, `answer_instruction(code)`, `detect_language(text)` with code removal, minimum length and a lazily built two-language detector, and `check_answer_language(expected, answer)`; verify that `answer_instruction("xx")` raises and that importing the module does not build the detector
-- [ ] 1.3 Add `src.services.language` to `PURE_MODULES` in `tests/unit/test_layer_purity.py`; verify that the guard passes, and that it fails if `language.py` imports `src.services.router` on purpose
-- [ ] 1.4 Write `tests/unit/test_language.py`: Spanish and English paragraphs that mix in technology and company names, a one-word greeting, an empty string, a code-only answer, and `check_answer_language` for match, mismatch and undetermined; verify that it passes in `uv run pytest tests/unit` without `.env`, and time the first detection call
+- [x] 1.1 Add `lingua-language-detector==2.2.0` as a runtime dependency with `uv add`; verify that `uv run --no-sync python -c "import lingua"` works and that `uv run pytest -m "not db"` still collects the same number of tests as before
+- [x] 1.2 Write `src/services/language.py` (D4): supported codes, `answer_instruction(code)`, `detect_language(text)` with code removal, minimum length and a lazily built two-language detector, and `check_answer_language(expected, answer)`; verify that `answer_instruction("xx")` raises and that importing the module does not build the detector
+- [x] 1.3 Add `src.services.language` to `PURE_MODULES` in `tests/unit/test_layer_purity.py`; verify that the guard passes, and that it fails if `language.py` imports `src.services.router` on purpose
+- [x] 1.4 Write `tests/unit/test_language.py`: Spanish and English paragraphs that mix in technology and company names, a one-word greeting, an empty string, a code-only answer, and `check_answer_language` for match, mismatch and undetermined; verify that it passes in `uv run pytest tests/unit` without `.env`, and time the first detection call
 
 ## 2. Supervisor decides the language (`BUG-11`)
 
