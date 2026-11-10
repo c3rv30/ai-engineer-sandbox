@@ -19,6 +19,3 @@ class ChatRequest(BaseModel):
                                 description="Hybrid search candidates for each query variant")
     top_k_rerank: int = Field(DEFAULT_TOP_K_RERANK, ge=1, le=MAX_TOP_K_RERANK,
                               description="Documents that survive re-ranking and reach the generator")
-
-class IngestRequest(BaseModel):
-    file_path: str
