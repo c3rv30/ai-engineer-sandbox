@@ -46,7 +46,7 @@
 ## 7. Documentation
 
 - [ ] 7.1 Catalog `BUG-11` in `docs/TECHNICAL_AUDIT.md`: the defect, the 8/9 and 9/9 evidence, the before/after report from 6.5 and its status, plus a row in the remediation plan; verify that the measured numbers match the report
-- [ ] 7.2 Update `README.md` (the note at the top and the "Corpus language vs. question language" paragraph) to say that the supervisor decides the answer language and that a mismatch is logged and not cached; verify that nothing in the README still describes the relative rule
+- [x] 7.2 Update `README.md` (the note at the top and the "Corpus language vs. question language" paragraph) to say that the supervisor decides the answer language and that a mismatch is logged and not cached; verify that nothing in the README still describes the relative rule
 
 ## Workflow follow-up
 

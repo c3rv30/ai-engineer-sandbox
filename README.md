@@ -11,7 +11,7 @@ A multi-agent RAG system built with **LangGraph**, **FastAPI** and **PostgreSQL 
 
 It was developed against the author's own résumé, and the supervisor prompt is written for that: questions like *"What did Bryan build at Betterfly?"* followed by *"and in which years?"*. Any Markdown, text, PDF or image file can be ingested.
 
-> The corpus is in Spanish. The system answers in the language of the question, Spanish or English.
+> The corpus is in Spanish. The system answers in Spanish or English, in the language the supervisor decides from the question.
 
 ---
 
@@ -77,9 +77,9 @@ A request goes through these steps:
 - The tenant is set per transaction with `set_config(..., true)`, so a pooled connection never leaks the previous user's tenant.
 - The tenant travels with an HMAC-SHA256 signature. A `SECURITY DEFINER` function checks it against a key the application role cannot read, so even an injected SQL statement cannot switch tenants.
 
-**Corpus language vs. question language.** Full-text search uses PostgreSQL's `spanish` configuration because the corpus is in Spanish. So the supervisor always writes its search queries and the HyDE paragraph in Spanish, whatever language the question is in, and the generator answers in the language of the question.
+**Corpus language vs. question language.** Full-text search uses PostgreSQL's `spanish` configuration because the corpus is in Spanish. So the supervisor always writes its search queries and the HyDE paragraph in Spanish, whatever language the question is in. It also decides the answer language (`es` or `en`): the language of the latest question, or the one the user asks for. The generator gets that decision as an explicit order, because a long Spanish context could pull an English answer into Spanish when the model had to work the language out itself. After the answer, a deterministic detector ([lingua](https://github.com/pemistahl/lingua-py)) checks it. A mismatch never blocks or changes the answer: it is logged, kept out of the cache, and stored with the evaluation. `tests/evals/answer_language/` measures the match rate.
 
-**Cache policy.** Only confident answers (≥ 0.5, no missing context) to knowledge questions or greetings are cached. Requests with conversation history skip the cache: a follow-up like "and in which years?" means different things in different conversations.
+**Cache policy.** Only confident answers (≥ 0.5, no missing context) to knowledge questions or greetings, in the decided language, are cached. Requests with conversation history skip the cache: a follow-up like "and in which years?" means different things in different conversations.
 
 **Online evaluation.** After each answer, a background task asks an LLM judge for faithfulness, answer relevance and context precision (0 to 1) and stores the scores, also under RLS.
 
@@ -142,10 +142,10 @@ The suite has four layers:
 
 | Layer | What it checks | Needs |
 | --- | --- | --- |
-| `tests/unit` | Routing, retry window, cache policy, tenant signature, layer purity | Nothing |
+| `tests/unit` | Routing, retry window, cache policy, answer language detector, tenant signature, layer purity | Nothing |
 | `tests/api` | Endpoints with test doubles for the graph and services | Nothing |
 | `tests/db` | Tenant isolation, role privileges and bootstrap against a disposable PostgreSQL | Docker |
-| `tests/evals` | Answer quality with an LLM judge (DeepEval); being updated to the current pipeline | API keys, `--run-evals` |
+| `tests/evals` | Answer quality with an LLM judge (DeepEval); being updated to the current pipeline. `answer_language/` is a separate runner, not collected by pytest ([how to run it](tests/evals/answer_language/README.md)) | API keys, `--run-evals`; the runner also needs the corpus |
 
 ```bash
 uv run pytest -m "not db"   # unit + API, no Docker
