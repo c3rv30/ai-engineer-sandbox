@@ -40,12 +40,12 @@
 - [x] 6.3 Collect the "before" variant from a worktree at the branch point (D10) and the "after" variant from the branch, each with `--repeats 5` and the default `top_k`; verify that each file has 100 lines and that the database counts are unchanged afterwards
 - [x] 6.4 Calibrate the detector's distance threshold and minimum length on the collected answers, reviewing by hand every answer it flags or leaves undetermined. If the values change, re-run 1.4 and rescore without new calls
 - [x] 6.5 Score both variants and compare them with `score.py --baseline`; keep the report and the call count for the commit body
-- [ ] 6.6 Measure the API process's physical footprint (`vmmap --summary`) and the first-detection latency, with and without the change, sequentially and with a warm disk cache; decide whether to warm the detector in the `lifespan`, and record the decision in the commit
-- [ ] 6.7 Run one end-to-end check against a real uvicorn: an English question over a Spanish context on `/chat/stream/` and on `/chat/` (with `top_k_rerank` other than 10, so the cache is not used). Verify that the answers are in English and that a new row in `rag_evaluations` carries both languages, then purge the rows the check added (memory and evaluations)
+- [x] 6.6 Measure the API process's physical footprint (`vmmap --summary`) and the first-detection latency, with and without the change, sequentially and with a warm disk cache; decide whether to warm the detector in the `lifespan`, and record the decision in the commit
+- [x] 6.7 Run one end-to-end check against a real uvicorn: an English question over a Spanish context on `/chat/stream/` and on `/chat/` (with `top_k_rerank` other than 10, so the cache is not used). Verify that the answers are in English and that a new row in `rag_evaluations` carries both languages, then purge the rows the check added (memory and evaluations)
 
 ## 7. Documentation
 
-- [ ] 7.1 Catalog `BUG-11` in `docs/TECHNICAL_AUDIT.md`: the defect, the 8/9 and 9/9 evidence, the before/after report from 6.5 and its status, plus a row in the remediation plan; verify that the measured numbers match the report
+- [x] 7.1 Catalog `BUG-11` in `docs/TECHNICAL_AUDIT.md`: the defect, the 8/9 and 9/9 evidence, the before/after report from 6.5 and its status, plus a row in the remediation plan; verify that the measured numbers match the report
 - [x] 7.2 Update `README.md` (the note at the top and the "Corpus language vs. question language" paragraph) to say that the supervisor decides the answer language and that a mismatch is logged and not cached; verify that nothing in the README still describes the relative rule
 
 ## Workflow follow-up
