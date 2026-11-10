@@ -1,14 +1,14 @@
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, ValidationError
 import jwt
 
-load_dotenv()
+import src.config  # noqa: F401  (loads .env before SECRET_KEY is read)
+
 
 # HS256 is symmetric: whoever knows this key can issue valid tokens for any tenant,
 # and Postgres RLS isolation stops having any effect.
@@ -62,9 +62,9 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt

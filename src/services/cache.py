@@ -1,12 +1,10 @@
 import uuid
 import json
 from typing import Optional
-from dotenv import load_dotenv
 
+import src.config  # noqa: F401  (loads .env)
 from src.services.db import tenant_connection
 from src.services.embeddings import embed, to_pgvector
-
-load_dotenv()
 
 
 async def check_semantic_cache(tenant_id: uuid.UUID, query: str, threshold: float = 0.85) -> Optional[dict]:

@@ -55,11 +55,11 @@ class Api:
 
     def header(self, *, tenant=TENANT, user="bryan", key=None, no_sub=False, no_tenant=False):
         import os
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
         import jwt
 
-        payload: dict[str, Any] = {"exp": datetime.utcnow() + timedelta(minutes=5)}
+        payload: dict[str, Any] = {"exp": datetime.now(timezone.utc) + timedelta(minutes=5)}
         if not no_sub:
             payload["sub"] = user
         if not no_tenant:

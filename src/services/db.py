@@ -12,9 +12,8 @@ import uuid
 from contextlib import asynccontextmanager
 
 import asyncpg
-from dotenv import load_dotenv
 
-load_dotenv()
+import src.config  # noqa: F401  (loads .env before DATABASE_URL is read)
 
 # A single DSN for the whole process. ingestion.py used to default to the postgres
 # superuser, which bypasses RLS; the default is now the application role.

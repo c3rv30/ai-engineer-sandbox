@@ -4,6 +4,8 @@ import asyncio
 import instructor
 from typing import List, Optional
 from anthropic import AsyncAnthropic
+
+from src.config import ANTHROPIC_MODEL
 from src.models.evaluation import RAGEvaluation
 from src.models.search import SearchResult
 from src.services.db import tenant_connection
@@ -43,7 +45,7 @@ async def evaluate_rag_response(tenant_id: uuid.UUID, query: str, answer: str, c
     
     try:
         evaluation = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=ANTHROPIC_MODEL,
             # With 300, the judge's answer was cut off in the middle of the JSON and the
             # evaluation was lost (PERF-04). The reasoning is bounded in the schema.
             max_tokens=1024,

@@ -11,11 +11,9 @@ import tiktoken
 import fitz  # PyMuPDF
 from anthropic import AsyncAnthropic
 from langfuse import observe
-from dotenv import load_dotenv
-
+from src.config import ANTHROPIC_MODEL
 from src.services.embeddings import EMBEDDING_MODEL, encode, to_pgvector
 
-load_dotenv()
 
 
 class DocumentChunk(BaseModel):
@@ -113,7 +111,7 @@ async def describe_image_with_claude(image_bytes: bytes, media_type: str = "imag
     prompt = "You are an expert analyst extracting information for RAG. Describe this image in great detail. Extract all visible text verbatim. If it is a chart or a table, describe its axes, metrics and relations. Write the description in Spanish."
     
     response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=ANTHROPIC_MODEL,
         max_tokens=1000,
         messages=[
             {

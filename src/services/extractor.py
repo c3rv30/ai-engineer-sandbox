@@ -5,6 +5,7 @@ from anthropic import AsyncAnthropic
 from instructor import Partial
 from langfuse import observe
 
+from src.config import ANTHROPIC_MODEL
 from src.models.search import RerankedResult
 from src.models.structured import StructuredAnswer
 from src.services.history import format_history
@@ -14,7 +15,6 @@ from src.services.language import answer_instruction
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 client = instructor.from_anthropic(anthropic_client)
 
-MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 8192
 
 
@@ -82,7 +82,7 @@ async def generate_answer(
     fallback when streaming does not manage to complete the structured object.
     """
     response = await client.messages.create(
-        model=MODEL,
+        model=ANTHROPIC_MODEL,
         max_tokens=MAX_TOKENS,
         messages=[
             {"role": "user", "content": _build_prompt(query, context, answer_language, user_profile, history)}
@@ -110,7 +110,7 @@ async def generate_answer_stream(
     that field yet.
     """
     response = await client.messages.create(
-        model=MODEL,
+        model=ANTHROPIC_MODEL,
         max_tokens=MAX_TOKENS,
         messages=[
             {"role": "user", "content": _build_prompt(query, context, answer_language, user_profile, history)}

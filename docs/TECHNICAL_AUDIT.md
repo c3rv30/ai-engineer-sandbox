@@ -112,12 +112,15 @@ This document is a snapshot of the state on the date in the header. The inventor
 | `BUG-07` | ✅ fixed | 2026-09-16 | Two-layer regression suite, planned as an OpenSpec change (`regression-test-suite`). Layer 1, pure logic: 71 tests in ~0.3 s without DB, LLM or `.env`. Layer 2, disposable Postgres started by pytest: 18 tests in ~8 s, without touching the development database. Negative control: 22 of 22 reintroduced defects detected |
 | API layer | ✅ added | 2026-09-17 | Third layer of the suite, with doubles for the graph and the services (OpenSpec change `api-regression-layer`): 40 tests without Docker that pin `SEC-01`, `SEC-02`, `SEC-06`, `BUG-01` and `BUG-09`. Negative control: 9 of 9. No production changes |
 | `HYG-09` | ✅ fixed | 2026-09-17 | `onnxruntime` telemetry disabled before importing FlashRank, in `reranker.py` and in `tests/conftest.py`. The full suite goes from aborting 7 of every 8 times to 0 of 10; same re-ranking before and after |
-| `HYG-01` | 🟡 partly fixed | 2026-11-09 | `pyjwt`, `numpy` and `python-multipart` declared. Clean clone following the README: `ModuleNotFoundError: No module named 'jwt'` → `111 passed` without Docker. Moving `deepeval` to `dev` is pending |
+| `HYG-01` | ✅ fixed | 2026-11-10 | `pyjwt`, `numpy` and `python-multipart` declared on 2026-11-09 (clean clone: `ModuleNotFoundError: No module named 'jwt'` → `111 passed` without Docker). `deepeval` moved to `dev` on 2026-11-10: production goes from 165 to 145 packages |
+| `HYG-05` | ✅ fixed | 2026-11-10 | `src/config.py` loads `.env` once, before any client. Each service imported first: `router` and `extractor` go from a client without a key to one with it |
+| `DOC-07` | ✅ fixed | 2026-11-10 | `ANTHROPIC_MODEL` in `src/config.py`; the seven calls use it, and `PAPER.md` no longer says Claude 3.5 Haiku |
+| `HYG-04` | ✅ fixed | 2026-11-10 | `datetime.now(timezone.utc)`; issuing a token no longer raises a `DeprecationWarning` |
+| `HYG-02` | ✅ fixed | 2026-11-10 | The root scripts went with the publication cleanup; `src/pipeline.py` (broken) and `IngestRequest` (unused) deleted now |
 | `HYG-10` | ✅ fixed | 2026-11-09 | New finding. `.python-version` with `3.14`: `uv sync` on a clean clone goes from failing with `onnxruntime` having no wheels for 3.15 to installing with CPython 3.14.8 |
 | `BUG-11` | ✅ fixed | 2026-11-10 | New finding, planned as an OpenSpec change (`supervisor-answer-language`). The supervisor decides the language and the generator gets an order; a mismatch is logged, not cached and stored with the evaluation. Eval of 100 answers per variant: 100% in the question's language **before and after** (Wilson 95% [92.9%, 100%] per language), so no measurable improvement: the guard and the measurement are what is new |
 | `BUG-12` | ✅ fixed | 2026-11-10 | New finding. One lock around `model.encode`. Four simultaneous first requests to a freshly started API: before, the server hung (4 timeouts at 90 s) or died (exit 133), in 2 of 2 starts; after, 4 × 200 in 2 of 2. Four concurrent cold `embed()` calls: 0 of 5 → 10 of 10 |
-| The other 9 from the snapshot | ⬜ open | — | — |
-| `HYG-05` | ⬜ open | 2026-09-14 | New finding; see §2 and the plan (§10) |
+| The other 5 from the snapshot (`DOC-04`, `DOC-05`, `DOC-06`, `DOC-08`, `HYG-03`) | ⬜ open | — | — |
 | `SEC-07` | 🟡 layer 1 fixed | 2026-09-16 | New finding, found while fixing `HYG-07`. `GRANT CONNECT` instead of `GRANT ALL` on the database. Same attack with the real code: at `HEAD`, the victim's password ends up in an attacker's table without RLS; with the patch, `CREATE SCHEMA` is denied and the write goes to `public`. Layers 2 and 3 (the `ALTER ROLE` residue) remain open |
 
 **Pending data decisions.** The fixed code no longer produces these two things, but they are still in the development database. They were not touched without the user deciding:
@@ -2730,6 +2733,8 @@ The seven call sites move to `model=ANTHROPIC_MODEL`. Update the README badge an
 
 With the environment variable, moreover, a more capable model can be tried in the generator without touching code, which is useful for the trade-off `PAPER.md` §9 discusses.
 
+**Status:** ✅ fixed on 2026-11-10. `ANTHROPIC_MODEL` in `src/config.py`, overridable from `.env`; the seven calls use it and the identifier is written only there. The README already said Claude Haiku 4.5 after the portfolio rewrite; `PAPER.md` said "Claude 3.5 Haiku" and quoted the literal, and both now match the code. `tests/unit/test_model_config.py` checks it by reading the source; negative control: the literal back in `memory.py` fails it.
+
 ---
 
 ### `DOC-08` ⚪ Python 3.12 (badge) vs. 3.14 (`requires-python`)
@@ -2828,6 +2833,8 @@ grep -rn "^import jwt\|^import numpy\|import numpy as np" src/
 
 **A note on the uncommitted pins.** The pending diff in the working tree pins three exact versions (`anthropic==1.4.0`, `deepeval==4.2.1`, `streamlit==1.63.0`) where there used to be ranges. Pinning is defensible for reproducibility, but it should be a conscious, documented decision, not a debugging leftover, and `uv.lock` already guarantees exact reproducibility on its own.
 
+**Status:** ✅ fixed on 2026-11-10. `deepeval` moved to the `dev` group, relocked with `uv lock` so no other version moves. `uv export --no-dev`: 165 → 145 packages (`deepeval` and the 19 it pulled in, `pytest` among them). A fresh `uv sync --no-dev` environment has neither `deepeval` nor `pytest` and imports the API.
+
 ---
 
 ### `HYG-02` 🟡 Dead code committed in the root
@@ -2868,6 +2875,8 @@ git rm --cached uvicorn.log
 If keeping them is preferred, move them to `scratch/` (out of pytest's discovery path) with a one-line `README` explaining what they are.
 
 Also remove `IngestRequest` from `src/models/requests.py`.
+
+**Status:** ✅ fixed on 2026-11-10. The six root scripts and `uvicorn.log` had gone when the repository was prepared for publication (`6246e7f`). `src/pipeline.py` (it called `retrieve_documents` without the `tenant_id` that became required, so it stopped with a `TypeError`) and `IngestRequest` (imported by nothing) are deleted now.
 
 ---
 
@@ -2959,6 +2968,8 @@ grep -n "utcnow" src/api/auth.py    # 41, 43
 +        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
 ```
 
+**Status:** ✅ fixed on 2026-11-10 with the entry's patch, also in the two test helpers that built tokens the same way. `tests/unit/test_access_token.py` issues a token with `DeprecationWarning` as an error; negative control: `utcnow()` back fails it.
+
 ---
 
 ### `HYG-05` 🟡 Three services create their Anthropic client before loading `.env`
@@ -2987,6 +2998,8 @@ done
 ```
 
 **Patch.** A single `src/config.py` that calls `load_dotenv()` and exposes the variables, imported by every service before reading the environment. Another option is to create the clients lazily on the first call. It fits with the single `ANTHROPIC_MODEL` that `DOC-07` proposes.
+
+**Status:** ✅ fixed on 2026-11-10. `src/config.py` calls `load_dotenv()` once, and the ten modules that read the environment at import time import it instead of loading `.env` themselves. At that date the defect was in two of the three files, not three: `evaluator.py` had imported `db.py`, which loads `.env`, since `PERF-01`. With the real `.env` and each module imported first in a new process, `router` and `extractor` go from a client without a key to one with it. `tests/api/test_dotenv_before_clients.py` does the same with `load_dotenv` doubled (2 of 5 services failed before); negative control: `router` without the import fails it.
 
 ---
 
@@ -3269,7 +3282,7 @@ The findings after the snapshot, with the block they fit in:
 | 35 | ✅ done (2026-09-16). Named volume for the data, with a verified backup and a cold migration of the current database | `HYG-08` | 5 | 30 min |
 | 30 | ✅ done (2026-09-15). A generic message with an identifier for the client; the detail, only in the log | `SEC-06` | 1 | 20 min |
 | 31 | ✅ done (2026-09-16). Do not use the cache when the request carries history | `BUG-10` | 2 | 15 min |
-| 32 | `src/config.py` with `load_dotenv()` before creating clients | `HYG-05` | 5 | 20 min |
+| 32 | ✅ done (2026-11-10). `src/config.py` with `load_dotenv()` before creating clients | `HYG-05` | 5 | 20 min |
 | 33 | ✅ done (2026-09-16). `restart: unless-stopped` on the `postgres` service | `HYG-06` | 5 | 2 min |
 | 36 | 🟡 layer 1 done (2026-09-16): `GRANT CONNECT` instead of `GRANT ALL` on the database, and a migration for the existing one. Still to decide whether `search_path` is neutralized in the application and `pg_db_role_setting` watched (together with `BUG-07`) | `SEC-07` | 1 | 20 min (layer 1) |
 | 37 | ✅ done (2026-09-17). `disable_telemetry_events()` before importing FlashRank, in `reranker.py` and in the tests | `HYG-09` | 5 | 5 min |
@@ -3334,17 +3347,17 @@ Step 12 must be done **together** with the `SEC-02` fix: with a pool, `SET app.c
 | 19 | Correct the mention of NetworkX and point to the roadmap | `DOC-04` | `README.md` |
 | 20 | Historical-document banner in `ARCHITECTURE.md` | `DOC-05` | `ARCHITECTURE.md` |
 | 21 | Align 400/500 tokens; remove `overlap`; cite by function, not by line | `DOC-06` | `PAPER.md` (both languages at the time), `ingestion.py` |
-| 22 | A single `ANTHROPIC_MODEL` constant; correct "Claude 3.5 Haiku" | `DOC-07` | new + 7 calls + `README.md` |
+| 22 | ✅ done (2026-11-10). A single `ANTHROPIC_MODEL` constant; correct "Claude 3.5 Haiku" | `DOC-07` | new + 7 calls + `README.md` |
 | 23 | Align the Python badge with `requires-python` | `DOC-08` | `README.md` or `pyproject.toml` |
 
 ### Block 5 — Hygiene and coverage
 
 | # | Action | Finding |
 |:---:|---|---|
-| 24 | 🟡 in part (2026-11-09): `pyjwt`, `numpy` and `python-multipart` declared; `pytest` and `pytest-asyncio` are already in `dev`. Moving `deepeval` to `dev` is left | `HYG-01` |
-| 25 | Delete the 9 dead files and `IngestRequest` | `HYG-02` |
+| 24 | ✅ done (2026-11-10). `pyjwt`, `numpy` and `python-multipart` declared (2026-11-09); `deepeval` moved to `dev` with `pytest` and `pytest-asyncio` | `HYG-01` |
+| 25 | ✅ done (2026-11-10). Delete the 9 dead files and `IngestRequest` | `HYG-02` |
 | 26 | Extend `.gitignore`; `git rm --cached .idea uvicorn.log` | `HYG-03` |
-| 27 | `datetime.now(timezone.utc)` | `HYG-04` |
+| 27 | ✅ done (2026-11-10). `datetime.now(timezone.utc)` | `HYG-04` |
 | 28 | ✅ done (2026-09-16). Two-layer regression suite (pure logic and disposable Postgres) with a negative control per finding; `test_rag.py` set aside in `tests/evals/` for the evals change | `BUG-07` |
 
 Step 28 has value of its own: unit tests of `route_supervisor` / `route_reviewer` on hand-built dictionaries would catch `BUG-05` as a regression and need neither a database nor the API.

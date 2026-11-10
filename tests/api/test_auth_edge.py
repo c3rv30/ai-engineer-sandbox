@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import jwt
@@ -49,7 +49,7 @@ def test_token_without_user_or_tenant(api, field):
 ])
 def test_malformed_tenant_in_the_token(api, tenant):
     api.script(generator_script("should not get here"))
-    payload = {"sub": "bryan", "tenant_id": tenant, "exp": datetime.utcnow() + timedelta(minutes=5)}
+    payload = {"sub": "bryan", "tenant_id": tenant, "exp": datetime.now(timezone.utc) + timedelta(minutes=5)}
     token = jwt.encode(payload, os.environ["JWT_SECRET_KEY"], algorithm="HS256")
     r = api.client.post("/chat/", json={"query": "Where did he work?"}, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 401, r.text

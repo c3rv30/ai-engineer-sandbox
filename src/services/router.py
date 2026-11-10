@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
 from langfuse import observe
 
+from src.config import ANTHROPIC_MODEL
 from src.services.history import format_history
 
 # Patch the Anthropic client with Instructor
@@ -82,10 +83,8 @@ async def analyze_query(query: str, history: list = None) -> QueryIntent:
     2. Write a `hypothetical_document` of 2-3 sentences pretending to be the ideal résumé or documentation fragment that would answer the question, using exact technical terminology (HyDE).
     """
     
-    # claude-haiku-4-5-20251001, which we found works perfectly on this account
-    # Haiku is very fast and cheap, ideal for routing
     response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=ANTHROPIC_MODEL,
         max_tokens=500,
         messages=[{"role": "user", "content": prompt}],
         response_model=QueryIntent,

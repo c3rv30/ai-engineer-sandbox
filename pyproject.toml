@@ -5,7 +5,6 @@ requires-python = ">=3.14"
 dependencies = [
     "anthropic==1.4.0",
     "asyncpg>=0.31.0",
-    "deepeval==4.2.1",
     "fastapi>=0.141.1",
     "flashrank>=0.2.10",
     "instructor>=1.16.0",
@@ -29,6 +28,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "deepeval==4.2.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
