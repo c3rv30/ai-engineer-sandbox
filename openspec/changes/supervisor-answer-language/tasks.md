@@ -35,8 +35,8 @@
 
 ## 6. Measurement (needs the user's confirmation before any call)
 
-- [ ] 6.1 Ask the user to confirm the cost (~500 LLM calls in total) and to provide a working `ANTHROPIC_API_KEY`; do not start without both
-- [ ] 6.2 Restore the development database from `~/Backups/ai_engineer_sandbox/`, as `verificacion-e2e` says (roles without `ON_ERROR_STOP`), apply `apply_answer_language.sql`, and record which tenant owns the CV documents; verify the 22/128/4/3/0 counts before the migration and take a snapshot of the counts before measuring
+- [x] 6.1 Ask the user to confirm the cost (~500 LLM calls in total) and to provide a working `ANTHROPIC_API_KEY`; do not start without both
+- [x] 6.2 Restore the development database from `~/Backups/ai_engineer_sandbox/`, as `verificacion-e2e` says (roles without `ON_ERROR_STOP`), apply `apply_answer_language.sql`, and record which tenant owns the CV documents; verify the 22/128/4/3/0 counts before the migration and take a snapshot of the counts before measuring
 - [ ] 6.3 Collect the "before" variant from a worktree at the branch point (D10) and the "after" variant from the branch, each with `--repeats 5` and the default `top_k`; verify that each file has 100 lines and that the database counts are unchanged afterwards
 - [ ] 6.4 Calibrate the detector's distance threshold and minimum length on the collected answers, reviewing by hand every answer it flags or leaves undetermined. If the values change, re-run 1.4 and rescore without new calls
 - [ ] 6.5 Score both variants and compare them with `score.py --baseline`; keep the report and the call count for the commit body
