@@ -95,12 +95,12 @@ flowchart TD
     Reranker -->|Top 5 Chunks| ContextPool{Context Pool}
     
     GSearch -->|Matching triples| Formatter[Structural Formatting]
-    Formatter -->|GraphRAG Context| Inyector[Forced Injection (Index 0)]
+    Formatter -->|GraphRAG Context| Inyector["Forced Injection (Index 0)"]
     
     Inyector --> ContextPool
     
     ContextPool --> LLM[Claude Haiku]
-    LLM --> Answer[Generated Answer (SSE Stream)]
+    LLM --> Answer["Generated Answer (SSE Stream)"]
 ```
 
 ### Implementation details (`src/api/routers/chat.py` & `src/services/graphrag.py`):
