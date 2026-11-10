@@ -1,4 +1,6 @@
 import os
+from typing import Literal
+
 import instructor
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
@@ -13,6 +15,11 @@ class QueryIntent(BaseModel):
     intent_type: str = Field(
         description="Must be 'casual_greeting', 'knowledge_search', 'tool_execution' or 'out_of_scope'."
     )
+    # Closed and required: a missing or free-text value fails validation and Instructor
+    # retries, instead of the generator falling back to working the language out (BUG-11).
+    answer_language: Literal["es", "en"] = Field(
+        description="Language of the answer: 'es' (Spanish) or 'en' (English). See the LANGUAGE rules."
+    )
     search_queries: list[str] = Field(
         description="If 'knowledge_search', 3 variations of the question optimized for search (full-text and vector similarity), written in Spanish. Otherwise, empty.",
         default_factory=list
@@ -22,7 +29,7 @@ class QueryIntent(BaseModel):
         default=""
     )
     direct_answer: str = Field(
-        description="If 'casual_greeting' or 'out_of_scope', your final answer, in the language of the user's input. Otherwise, empty.",
+        description="If 'casual_greeting' or 'out_of_scope', your final answer, written in `answer_language`. Otherwise, empty.",
         default=""
     )
     tool_name: str = Field(
@@ -43,7 +50,8 @@ async def analyze_query(query: str, history: list = None) -> QueryIntent:
 
     # The search queries and the HyDE paragraph go in Spanish whatever language the user
     # writes in: the corpus is in Spanish and full-text search uses the 'spanish'
-    # configuration (sql/01_init.sql, retriever.py). The direct answer, in the user's language.
+    # configuration (sql/01_init.sql, retriever.py). The answer language is decided here,
+    # once, and every writer of answer text follows it (BUG-11).
     prompt = f"""
     You are the "Router" of an AI Engineer Sandbox that is currently analyzing the résumé and professional profile of the engineer Bryan Bobadilla.
     
@@ -63,7 +71,11 @@ async def analyze_query(query: str, history: list = None) -> QueryIntent:
     2. get_crypto_price: Takes the argument 'symbol' (e.g. bitcoin, ethereum).
     3. get_github_profile: Takes the argument 'username'.
     
-    LANGUAGE: The user may write in Spanish or English. Write `direct_answer` in the user's language. Write `search_queries` and `hypothetical_document` in Spanish in every case, because the indexed documents are in Spanish.
+    LANGUAGE: Decide `answer_language`, the language the answer must be written in:
+    - The language of the user input above. The conversation history does NOT count: if the history is in Spanish and the input is in English, it is 'en'.
+    - If the user explicitly asks for the answer in Spanish or in English, that language wins.
+    - If the input is in any other language, 'en'.
+    Write `direct_answer` in `answer_language`. Write `search_queries` and `hypothetical_document` in Spanish in every case, because the indexed documents are in Spanish.
     
     IMPORTANT: If the intent is 'knowledge_search':
     1. Generate 3 different variations of the question in `search_queries` to cover synonyms and different wordings (Multi-Query). If the question depends on the history (e.g. "And what did he do there?"), resolve the coreference in every variation.

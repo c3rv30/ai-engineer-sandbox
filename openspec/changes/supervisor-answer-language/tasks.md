@@ -7,9 +7,9 @@
 
 ## 2. Supervisor decides the language (`BUG-11`)
 
-- [ ] 2.1 Add the required `answer_language: Literal["es", "en"]` field to `QueryIntent`, and rewrite the prompt's `LANGUAGE:` paragraph with the decision rules from D1 (latest message, explicit request, history does not count, other languages go to `en`); `direct_answer` follows `answer_language`, and the search queries and HyDE stay in Spanish. Verify with a test in `tests/api/` that `QueryIntent` rejects `"English"` and a missing value
-- [ ] 2.2 Add `answer_language` to `AgentState`, write it from `supervisor_node` on all three branches, and initialize it to `""` in both `initial_state` blocks in `chat.py`; verify with `uv run pytest tests/api` that the graph still builds
-- [ ] 2.3 Update `tests/api/doubles.py` so that the supervisor update carries `answer_language`, matching the shape `nodes.py` now emits; verify that the whole API layer passes
+- [x] 2.1 Add the required `answer_language: Literal["es", "en"]` field to `QueryIntent`, and rewrite the prompt's `LANGUAGE:` paragraph with the decision rules from D1 (latest message, explicit request, history does not count, other languages go to `en`); `direct_answer` follows `answer_language`, and the search queries and HyDE stay in Spanish. Verify with a test in `tests/api/` that `QueryIntent` rejects `"English"` and a missing value
+- [x] 2.2 Add `answer_language` to `AgentState`, write it from `supervisor_node` on all three branches, and initialize it to `""` in both `initial_state` blocks in `chat.py`; verify with `uv run pytest tests/api` that the graph still builds
+- [x] 2.3 Update `tests/api/doubles.py` so that the supervisor update carries `answer_language`, matching the shape `nodes.py` now emits; verify that the whole API layer passes
 
 ## 3. Generator gets an explicit order (`BUG-11`)
 

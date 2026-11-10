@@ -25,6 +25,9 @@ class AgentState(TypedDict):
 
     # Supervisor decisions
     intent_type: str
+    # 'es' or 'en'. Written on every path, including the ones that end in the supervisor,
+    # so the endpoints can check the final answer against it (BUG-11).
+    answer_language: str
     
     # Artifacts produced by the nodes
     search_queries: List[str]

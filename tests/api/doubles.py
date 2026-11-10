@@ -7,10 +7,11 @@ that needs updating.
 
 Contract reproduced (see nodes.py and chat.py):
 - `ainvoke(state)` returns the final state; the endpoint reads `final_answer`,
-  `intent_type` and `documents`.
+  `intent_type`, `answer_language` and `documents`.
 - `astream(state, stream_mode=["updates", "custom"])` yields `(mode, chunk)` tuples:
   with `"custom"`, `chunk` is `{"delta": str}` (the generator's text as it is produced);
-  with `"updates"`, `chunk` is `{node_name: state_update}`.
+  with `"updates"`, `chunk` is `{node_name: state_update}`. The supervisor's update
+  always carries `intent_type` and `answer_language`.
 """
 from dataclasses import dataclass, field
 from typing import Any
@@ -50,7 +51,7 @@ class Script:
     final_state: dict[str, Any]
 
 
-def supervisor_script(text: str, *, intent_type: str = "casual_greeting") -> Script:
+def supervisor_script(text: str, *, intent_type: str = "casual_greeting", language: str = "en") -> Script:
     """The supervisor resolves on its own: greeting, out-of-scope topic or tool.
 
     The graph ends there, without going through the researcher or the generator, so
@@ -58,21 +59,25 @@ def supervisor_script(text: str, *, intent_type: str = "casual_greeting") -> Scr
     """
     final = answer(text, confidence=1.0)
     return Script(
-        emissions=[("updates", {"supervisor": {"intent_type": intent_type, "final_answer": final}})],
-        final_state={"intent_type": intent_type, "final_answer": final, "documents": []},
+        emissions=[("updates", {"supervisor": {"intent_type": intent_type, "answer_language": language,
+                                               "final_answer": final}})],
+        final_state={"intent_type": intent_type, "answer_language": language, "final_answer": final,
+                     "documents": []},
     )
 
 
 def generator_script(text: str, *, intent_type: str = "knowledge_search",
                      documents: list[SearchResult] | None = None,
                      chunks: list[str] | None = None,
-                     confidence: float = 0.9, needs_more: bool = False) -> Script:
+                     confidence: float = 0.9, needs_more: bool = False,
+                     language: str = "en") -> Script:
     """Full path: supervisor, researcher and generator emitting token by token."""
     docs = documents if documents is not None else [document()]
     final = answer(text, confidence=confidence, needs_more=needs_more)
     parts = chunks if chunks is not None else [text]
     emissions: list[tuple[str, dict[str, Any]]] = [
-        ("updates", {"supervisor": {"intent_type": intent_type, "search_queries": [text[:20]]}}),
+        ("updates", {"supervisor": {"intent_type": intent_type, "answer_language": language,
+                                    "search_queries": [text[:20]]}}),
         ("updates", {"researcher": {"documents": docs, "iterations": 1, "retrieval_exhausted": False}}),
         ("custom", {"delta": GENERATOR_PREFIX}),
     ]
@@ -80,7 +85,8 @@ def generator_script(text: str, *, intent_type: str = "knowledge_search",
     emissions.append(("updates", {"generator": {"final_answer": final, "needs_more_info": needs_more}}))
     return Script(
         emissions=emissions,
-        final_state={"intent_type": intent_type, "final_answer": final, "documents": docs},
+        final_state={"intent_type": intent_type, "answer_language": language, "final_answer": final,
+                     "documents": docs},
     )
 
 
