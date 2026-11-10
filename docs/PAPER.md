@@ -61,7 +61,7 @@ The *AI Engineer Sandbox* is designed under *Clean Architecture* principles, str
 ### 4.1. Overview and Tech Stack
 The infrastructure is founded on a modern Python ecosystem (version 3.12+) managed via the `uv` packager.
 - **Logic Layer (Backend):** Implemented in **FastAPI**, providing asynchronous routing and native WebSockets/SSE.
-- **Reasoning Layer:** Orchestrated by **LangGraph** (handling cyclic graphs) and powered by **Anthropic Claude 3.5 Haiku**. *Haiku* was chosen for its ultra-low latency (ideal for the Supervisor node) and its low cost per token (Token Economics), ensuring fluid routing without sacrificing analytical capability.
+- **Reasoning Layer:** Orchestrated by **LangGraph** (handling cyclic graphs) and powered by **Anthropic Claude Haiku 4.5**. *Haiku* was chosen for its ultra-low latency (ideal for the Supervisor node) and its low cost per token (Token Economics), ensuring fluid routing without sacrificing analytical capability.
 - **Persistence Layer:** **PostgreSQL 16** with the **pgvector** extension. It centralizes semantic vectors, the lexical search engine (BM25), semantic cache, relational memory schemas, and the knowledge graph store, bypassing the need to maintain isolated database microservices.
 - **Presentation Layer:** **Streamlit**, operating as a decoupled client that consumes server events in real-time.
 
@@ -248,7 +248,7 @@ class QueryIntent(BaseModel):
     tool_name: str = Field(default="")
 
 response = await client.messages.create(
-    model="claude-haiku-4-5-20251001",
+    model=ANTHROPIC_MODEL,  # src/config.py: Claude Haiku 4.5 unless .env says otherwise
     max_tokens=500,
     messages=[{"role": "user", "content": prompt}],
     response_model=QueryIntent,

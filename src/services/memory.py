@@ -3,7 +3,7 @@ import uuid
 import instructor
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
-import src.config  # noqa: F401  (loads .env before the client is built)
+from src.config import ANTHROPIC_MODEL
 from src.services.db import tenant_connection
 from src.services.embeddings import embed, to_pgvector
 
@@ -30,7 +30,7 @@ async def extract_and_save_facts(tenant_id: uuid.UUID, user_message: str):
     
     try:
         extraction: ExtractedFacts = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=ANTHROPIC_MODEL,
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
             response_model=ExtractedFacts,

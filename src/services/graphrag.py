@@ -5,7 +5,7 @@ from typing import List, Dict
 from pydantic import BaseModel
 import instructor
 from anthropic import AsyncAnthropic
-import src.config  # noqa: F401  (loads .env before the client is built)
+from src.config import ANTHROPIC_MODEL
 from src.services.db import tenant_connection
 
 
@@ -35,7 +35,7 @@ async def extract_knowledge_graph(chunk_text: str) -> List[Triplet]:
     """
     try:
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=ANTHROPIC_MODEL,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
             response_model=KnowledgeGraphExtraction
