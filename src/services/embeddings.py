@@ -4,6 +4,7 @@ Before, retriever, cache, memory and ingestion each loaded it separately: four c
 the model in memory and four loads in a row when importing the API.
 """
 import asyncio
+import threading
 
 from sentence_transformers import SentenceTransformer
 
@@ -25,9 +26,22 @@ if _get_dimension() != EMBEDDING_DIM:
     )
 
 
+# With torch 2.13 on macOS arm64, two threads inside model.encode at once hang or
+# segfault the process (BUG-12), and both the researcher (four queries in parallel) and
+# concurrent requests do exactly that. One query takes ~7 ms, so serializing is cheap.
+_encode_lock = threading.Lock()
+
+
+def encode(texts):
+    """model.encode, one call at a time in the whole process (BUG-12). It blocks: from
+    async code, call it through embed() or asyncio.to_thread."""
+    with _encode_lock:
+        return model.encode(texts)
+
+
 async def embed(text: str):
     """Embedding of a text, computed in a thread so as not to block the event loop."""
-    return await asyncio.to_thread(model.encode, text)
+    return await asyncio.to_thread(encode, text)
 
 
 def to_pgvector(embedding) -> str:

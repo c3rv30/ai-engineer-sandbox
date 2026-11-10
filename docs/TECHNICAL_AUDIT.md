@@ -53,6 +53,7 @@ The value of this audit is not in questioning the design but in recording three 
 > - `SEC-07` (🟠), on 2026-09-16, while fixing `HYG-07`.
 > - `HYG-09` (⚪), on 2026-09-17, while closing the API regression layer.
 > - `HYG-10` (🟠), on 2026-11-09, while verifying `HYG-01` from a clean clone.
+> - `BUG-12` (🟠), on 2026-11-10, while preparing the measurement of the answer language change (`BUG-11`).
 
 ### Severity criteria
 
@@ -112,6 +113,7 @@ This document is a snapshot of the state on the date in the header. The inventor
 | `HYG-09` | ✅ fixed | 2026-09-17 | `onnxruntime` telemetry disabled before importing FlashRank, in `reranker.py` and in `tests/conftest.py`. The full suite goes from aborting 7 of every 8 times to 0 of 10; same re-ranking before and after |
 | `HYG-01` | 🟡 partly fixed | 2026-11-09 | `pyjwt`, `numpy` and `python-multipart` declared. Clean clone following the README: `ModuleNotFoundError: No module named 'jwt'` → `111 passed` without Docker. Moving `deepeval` to `dev` is pending |
 | `HYG-10` | ✅ fixed | 2026-11-09 | New finding. `.python-version` with `3.14`: `uv sync` on a clean clone goes from failing with `onnxruntime` having no wheels for 3.15 to installing with CPython 3.14.8 |
+| `BUG-12` | ✅ fixed | 2026-11-10 | New finding. One lock around `model.encode`. Four simultaneous first requests to a freshly started API: before, the server hung (4 timeouts at 90 s) or died (exit 133), in 2 of 2 starts; after, 4 × 200 in 2 of 2. Four concurrent cold `embed()` calls: 0 of 5 → 10 of 10 |
 | The other 9 from the snapshot | ⬜ open | — | — |
 | `HYG-05` | ⬜ open | 2026-09-14 | New finding; see §2 and the plan (§10) |
 | `SEC-07` | 🟡 layer 1 fixed | 2026-09-16 | New finding, found while fixing `HYG-07`. `GRANT CONNECT` instead of `GRANT ALL` on the database. Same attack with the real code: at `HEAD`, the victim's password ends up in an attacker's table without RLS; with the patch, `CREATE SCHEMA` is denied and the write goes to `public`. Layers 2 and 3 (the `ALTER ROLE` residue) remain open |
@@ -184,8 +186,9 @@ This document is a snapshot of the state on the date in the header. The inventor
 | `SEC-07` | 🟠 | `app_user` can divert the application's queries to its own tables without RLS | `sql/00_create_app_user.sql:2` | 1 |
 | `HYG-09` | ⚪ | `onnxruntime` telemetry aborts the process on shutdown | `src/services/reranker.py:38` (through FlashRank) | 5 |
 | `HYG-10` | 🟠 | `uv sync` picks Python 3.15 and the install fails | `pyproject.toml:4` | 5 |
+| `BUG-12` | 🟠 | Concurrent first embeddings hang or crash the process | `src/services/embeddings.py:28` | 2 |
 
-The last ten rows came after the snapshot (five from 2026-09-14, `HYG-07` from 2026-09-15, `HYG-08` and `SEC-07` from 2026-09-16, `HYG-09` from 2026-09-17 and `HYG-10` from 2026-11-09) and are not part of the count in §1.
+The last eleven rows came after the snapshot (five from 2026-09-14, `HYG-07` from 2026-09-15, `HYG-08` and `SEC-07` from 2026-09-16, `HYG-09` from 2026-09-17, `HYG-10` from 2026-11-09 and `BUG-12` from 2026-11-10) and are not part of the count in §1.
 
 ---
 
@@ -1775,6 +1778,29 @@ B's turn 2 answer was **byte for byte** A's, with a `✅ Cache Hit` in the serve
 
 ---
 
+### `BUG-12` 🟠 Concurrent first embeddings hang or crash the process
+
+> After the snapshot: found on 2026-11-10, when the first run of the answer language eval (`BUG-11`) died with a segfault (exit 139) inside the researcher.
+
+**Location.** `src/services/embeddings.py:28` (`embed()`, which runs `model.encode` with `asyncio.to_thread`). Its concurrent callers: the researcher, which embeds its query variants at once (`src/services/agent_graph/nodes.py:85`), and every request the API serves at the same time. Ingestion calls `model.encode` from threads as well (`src/services/ingestion.py:67` and `:170`).
+
+**Analysis.** With torch 2.13.0, sentence-transformers 6.0.1 and CPython 3.14.8 on macOS arm64, several threads entering `model.encode` while the process has not finished a first encode hang or kill the process. Once a single encode has finished, the same concurrency works: four concurrent `embed()` calls after one alone passed 50 of 50 rounds (10 processes, 5 rounds each). **Why the first one matters is not verified**; it looks like a lazy initialization in torch or the tokenizer that is not thread-safe, and it was not chased further, because the fix does not depend on it. `torch.set_num_threads(1)` does not avoid it (2 crashes and 1 hang in 3 runs).
+
+The API usually escapes it because each request embeds alone first (semantic cache or user memory) before the researcher fans out. It does not escape it when a freshly started process gets several requests at once, which is what a restart under traffic looks like. Anything that calls the graph directly, like the eval runner, hits it on its first question.
+
+**Evidence.** Four concurrent `embed()` calls in a new process, with the code of `develop`: 2 segfaults (-11) and 3 hangs (over 60 s) in 5 runs; one call alone works. Against a real uvicorn just started, four simultaneous `/chat/` requests as its first ones (`top_k_rerank=9`, outside the cache):
+
+| Start | Before the fix | After the fix |
+|---|---|---|
+| 1 | 4 × `ReadTimeout` at 90 s; the process alive and no LLM call made | 4 × 200 in 8–14 s |
+| 2 | 4 × `RemoteProtocolError` at 8 s; the server died with exit 133 | 4 × 200 in 8–14 s |
+
+**Patch.** `encode()` in `src/services/embeddings.py`, `model.encode` under one `threading.Lock`; `embed()` and ingestion go through it. It serializes every encode, not just the first ones: whether warm concurrent encodes are safe in every case (a large ingestion batch next to a query, other platforms) was not proven, and the cost is small. One query takes ~7 ms, so the researcher's four variants wait ~20 ms at most. A query that arrives during an ingestion waits for its batch (~1.2 s for 400 sentences, `PERF-03`).
+
+**Status:** ✅ fixed on 2026-11-10. Four concurrent cold `embed()` calls: 0 of 5 → 10 of 10. The API table above, 0 of 2 → 2 of 2 starts. `tests/api/test_concurrent_encode.py` doubles the model with one that records how many calls are inside `encode` at once (a real overlap would hang the suite instead of failing it): the researcher's four queries and an ingestion next to two queries never overlap. Negative control: without the lock, 4 and 2 overlapping calls; with ingestion back on `model.encode`, its sentences never reach the shared encode. The 10 evaluations the verification left in `rag_evaluations` were deleted: 22/128/4/3/0, as before.
+
+---
+
 ## 6. Performance
 
 ### `PERF-01` 🟠 No connection pool: ~11 connections per query
@@ -3214,6 +3240,7 @@ The findings after the snapshot, with the block they fit in:
 | 36 | 🟡 layer 1 done (2026-09-16): `GRANT CONNECT` instead of `GRANT ALL` on the database, and a migration for the existing one. Still to decide whether `search_path` is neutralized in the application and `pg_db_role_setting` watched (together with `BUG-07`) | `SEC-07` | 1 | 20 min (layer 1) |
 | 37 | ✅ done (2026-09-17). `disable_telemetry_events()` before importing FlashRank, in `reranker.py` and in the tests | `HYG-09` | 5 | 5 min |
 | 38 | ✅ done (2026-11-09). `.python-version` with `3.14` | `HYG-10` | 5 | 2 min |
+| 39 | ✅ done (2026-11-10). One `threading.Lock` around every `model.encode` of the process | `BUG-12` | 2 | 15 min |
 | D-01, D-02 | Data cleanups pending a decision (table in §1) | `SEC-04`, `BUG-02` | — | 5 min |
 
 The checks for the fixes of blocks 0 to 2 ran from scripts outside the repository: negative controls against the real server and direct cases for routing, retrieval window, cache policy and validation. What is reproducible about them is in each finding's status line and in its commit message. Turning the cases that need neither a database nor an LLM into versioned tests is part of step 28 (`BUG-07`). Done on 2026-09-16: since then, most of them live in `tests/unit/` and `tests/db/`.
