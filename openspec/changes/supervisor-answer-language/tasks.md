@@ -13,9 +13,9 @@
 
 ## 3. Generator gets an explicit order (`BUG-11`)
 
-- [ ] 3.1 Add the required `answer_language` argument to `generate_answer` and `generate_answer_stream`, put `answer_instruction(answer_language)` after the Context in `_build_prompt`, remove the relative rule, and pass `state["answer_language"]` from `generator_node`; verify that `grep -n "same language as the Question" src/` finds nothing
-- [ ] 3.2 Write a test in `tests/api/test_answer_language.py` (spec scenario "Explicit instruction"): for `answer_language="en"`, the prompt orders English after the Context and does not ask to match the question's language. Run the negative control: put the relative rule back, check that the test fails, and restore it
-- [ ] 3.3 Update `tests/evals/test_rag.py` to pass `answer_language="en"`; verify that `uv run pytest --run-evals --collect-only` collects it without errors
+- [x] 3.1 Add the required `answer_language` argument to `generate_answer` and `generate_answer_stream`, put `answer_instruction(answer_language)` after the Context in `_build_prompt`, remove the relative rule, and pass `state["answer_language"]` from `generator_node`; verify that `grep -n "same language as the Question" src/` finds nothing
+- [x] 3.2 Write a test in `tests/api/test_answer_language.py` (spec scenario "Explicit instruction"): for `answer_language="en"`, the prompt orders English after the Context and does not ask to match the question's language. Run the negative control: put the relative rule back, check that the test fails, and restore it
+- [x] 3.3 Update `tests/evals/test_rag.py` to pass `answer_language="en"`; verify that `uv run pytest --run-evals --collect-only` collects it without errors
 
 ## 4. Non-blocking safety net (`BUG-11`)
 

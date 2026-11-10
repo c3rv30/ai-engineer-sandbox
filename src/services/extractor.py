@@ -8,6 +8,7 @@ from langfuse import observe
 from src.models.search import RerankedResult
 from src.models.structured import StructuredAnswer
 from src.services.history import format_history
+from src.services.language import answer_instruction
 
 # Initialize the Anthropic client and wrap it with instructor
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -20,6 +21,7 @@ MAX_TOKENS = 8192
 def _build_prompt(
     query: str,
     context: List[RerankedResult],
+    answer_language: str,
     user_profile: str = "",
     history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
@@ -35,8 +37,10 @@ def _build_prompt(
 
     history_str = format_history(history)
 
-    # The language rule goes after the Context on purpose: placed before a long
-    # Spanish context, an English question was answered in Spanish.
+    # The language order goes after the Context on purpose: placed before a long
+    # Spanish context, an English question was answered in Spanish. It names the
+    # language the supervisor decided instead of asking the model to work it out
+    # from the Question (BUG-11).
     return f"""
     You are an expert AI Engineering assistant. Your goal is to answer the user's question using ONLY the information provided in the Context.
     If the information is not enough, say so in 'requires_more_info'.
@@ -54,7 +58,7 @@ def _build_prompt(
     Context:
     {context_text}
 
-    LANGUAGE: Write 'answer' in the same language as the Question above ("{query}"), even though the Context may be in another language. Translate what you take from the Context; keep proper nouns, company names and technology names as they are.
+    {answer_instruction(answer_language)}
     """
 
 
@@ -62,6 +66,7 @@ def _build_prompt(
 async def generate_answer(
     query: str,
     context: List[RerankedResult],
+    answer_language: str,
     user_profile: str = "",
     history: Optional[List[Dict[str, str]]] = None,
 ) -> StructuredAnswer:
@@ -80,7 +85,7 @@ async def generate_answer(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         messages=[
-            {"role": "user", "content": _build_prompt(query, context, user_profile, history)}
+            {"role": "user", "content": _build_prompt(query, context, answer_language, user_profile, history)}
         ],
         response_model=StructuredAnswer
     )
@@ -92,6 +97,7 @@ async def generate_answer(
 async def generate_answer_stream(
     query: str,
     context: List[RerankedResult],
+    answer_language: str,
     user_profile: str = "",
     history: Optional[List[Dict[str, str]]] = None,
 ) -> AsyncGenerator[Partial[StructuredAnswer], None]:
@@ -107,7 +113,7 @@ async def generate_answer_stream(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         messages=[
-            {"role": "user", "content": _build_prompt(query, context, user_profile, history)}
+            {"role": "user", "content": _build_prompt(query, context, answer_language, user_profile, history)}
         ],
         response_model=Partial[StructuredAnswer],
         stream=True

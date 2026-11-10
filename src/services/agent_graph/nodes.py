@@ -135,6 +135,8 @@ async def generator_node(state: AgentState) -> dict:
     kwargs = dict(
         query=state["query"],
         context=state["documents"],
+        # The supervisor's decision; a retry of the loop reuses it (BUG-11).
+        answer_language=state["answer_language"],
         user_profile=state["user_profile"],
         history=state.get("history", [])
     )

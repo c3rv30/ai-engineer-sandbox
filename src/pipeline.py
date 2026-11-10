@@ -7,7 +7,7 @@ from src.services.extractor import generate_answer
 from langfuse import observe
 
 @observe(name="rag_pipeline")
-async def run_search_pipeline(query: str):
+async def run_search_pipeline(query: str, answer_language: str):
     print(f"\n[1] Question: '{query}'")
     
     print("\n[2] Stage 1: Vector retrieval (Retriever)...")
@@ -27,7 +27,7 @@ async def run_search_pipeline(query: str):
         print("No documents found.")
         return
         
-    answer = await generate_answer(query, best_results)
+    answer = await generate_answer(query, best_results, answer_language)
     
     print("\n================ STRUCTURED ANSWER ================")
     # Pretty-print the Pydantic model
@@ -39,6 +39,8 @@ async def run_search_pipeline(query: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the full RAG pipeline")
     parser.add_argument("query", help="Question to search for and answer")
+    # Without the graph there is no supervisor to decide it (BUG-11).
+    parser.add_argument("--language", choices=["es", "en"], required=True, help="Language of the answer")
     args = parser.parse_args()
     
-    asyncio.run(run_search_pipeline(args.query))
+    asyncio.run(run_search_pipeline(args.query, args.language))

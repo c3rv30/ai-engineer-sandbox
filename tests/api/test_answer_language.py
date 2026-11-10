@@ -32,3 +32,33 @@ def test_supervisor_decision_is_required(query_intent):
     # Without a default, Instructor sends the error back to the model and retries.
     with pytest.raises(ValidationError):
         query_intent(**INTENT)
+
+
+def build_prompt(language, query="What did he do at Itaú?"):
+    from src.models.search import RerankedResult
+    from src.services.extractor import _build_prompt
+
+    context = [RerankedResult(id="doc-1", content="Bryan trabajó en Itaú como Data Engineer.",
+                              metadata={}, score=0.9, rerank_score=0.9)]
+    return _build_prompt(query, context, language)
+
+
+def test_generator_gets_an_order_naming_the_language(app_module):
+    prompt = build_prompt("en")
+    assert "Write 'answer' in English" in prompt
+    # After the Context: placed before a long Spanish context, it lost (fef8f31).
+    assert prompt.index("Write 'answer' in English") > prompt.index("Context:")
+    # And nothing asks the model to work the language out from the Question.
+    assert "same language as the Question" not in prompt
+
+
+def test_the_order_follows_the_decision_not_the_question(app_module):
+    # An English question with an explicit request for Spanish: the supervisor decided 'es'.
+    prompt = build_prompt("es", query="Answer in Spanish: what did he do at Itaú?")
+    assert "Write 'answer' in Spanish" in prompt
+    assert "Write 'answer' in English" not in prompt
+
+
+def test_generator_rejects_an_unsupported_language(app_module):
+    with pytest.raises(ValueError):
+        build_prompt("")
