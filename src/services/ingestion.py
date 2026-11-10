@@ -13,7 +13,7 @@ from anthropic import AsyncAnthropic
 from langfuse import observe
 from dotenv import load_dotenv
 
-from src.services.embeddings import EMBEDDING_MODEL, model, to_pgvector
+from src.services.embeddings import EMBEDDING_MODEL, encode, to_pgvector
 
 load_dotenv()
 
@@ -64,7 +64,7 @@ def chunk_text(content: str, source_type: str, max_tokens: int = 400, overlap: i
     # 2. Embed the sentences to compare similarity
     # It is CPU work (~1.2 s for 400 sentences): from async code, chunk_text must be
     # called with asyncio.to_thread or the server stops serving while it runs (PERF-03).
-    sentence_embeddings = model.encode(sentences)
+    sentence_embeddings = encode(sentences)
     
     distances = [cosine_distance(sentence_embeddings[i], sentence_embeddings[i+1]) for i in range(len(sentences)-1)]
     
@@ -167,7 +167,7 @@ async def generate_embeddings(chunks: List[DocumentChunk]) -> List[DocumentChunk
     if not chunks:
         return chunks
     texts = [chunk.text for chunk in chunks]
-    embeddings_np = await asyncio.to_thread(model.encode, texts)
+    embeddings_np = await asyncio.to_thread(encode, texts)
     for chunk, emb in zip(chunks, embeddings_np):
         chunk.embedding = emb.tolist()
     return chunks
