@@ -10,19 +10,19 @@ import jwt
 
 load_dotenv()
 
-# HS256 es simétrico: quien conozca esta clave puede emitir tokens válidos para
-# cualquier tenant, y el aislamiento RLS de Postgres deja de tener efecto.
-# Por eso no admite valor por defecto: si falta, el proceso no arranca.
+# HS256 is symmetric: whoever knows this key can issue valid tokens for any tenant,
+# and Postgres RLS isolation stops having any effect.
+# That is why there is no default: if it is missing, the process does not start.
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError(
-        "JWT_SECRET_KEY no está configurada. Añádela a tu archivo .env "
-        "(genera una con: openssl rand -hex 32)."
+        "JWT_SECRET_KEY is not set. Add it to your .env file "
+        "(generate one with: openssl rand -hex 32)."
     )
 if len(SECRET_KEY) < 32:
     raise RuntimeError(
-        "JWT_SECRET_KEY es demasiado corta (mínimo 32 caracteres). "
-        "Genera una con: openssl rand -hex 32"
+        "JWT_SECRET_KEY is too short (minimum 32 characters). "
+        "Generate one with: openssl rand -hex 32"
     )
 
 ALGORITHM = "HS256"
@@ -36,22 +36,22 @@ class Token(BaseModel):
 
 class User(BaseModel):
     username: str
-    # El tenant_id fija app.current_tenant en la capa de datos (src/services/db.py).
-    # Tiparlo como UUID hace que Pydantic rechace en el borde cualquier valor malformado
-    # antes de que llegue ahí, y garantiza la forma canónica aguas abajo.
+    # tenant_id sets app.current_tenant in the data layer (src/services/db.py).
+    # Typing it as UUID makes Pydantic reject any malformed value at the edge, before
+    # it gets there, and guarantees the canonical form downstream.
     tenant_id: uuid.UUID
 
 # Mock Database of users
-# NOTA: no es un sistema de autenticación real. Las contraseñas están en claro y
-# sirven únicamente para demostrar el aislamiento multi-tenant del sandbox.
+# NOTE: this is not a real authentication system. The passwords are in plain text and
+# exist only to demonstrate the sandbox's multi-tenant isolation.
 FAKE_USERS_DB = {
     "bryan": {
         "username": "bryan",
         "password": "password123",
         "tenant_id": "00000000-0000-0000-0000-000000000000"
     },
-    "empresa_x": {
-        "username": "empresa_x",
+    "company_x": {
+        "username": "company_x",
         "password": "password123",
         "tenant_id": "11111111-1111-1111-1111-111111111111"
     }
@@ -98,7 +98,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
         tenant_id = payload.get("tenant_id")
         if username is None or tenant_id is None:
             raise credentials_exception
-        # Un tenant_id mal formado levanta ValidationError aquí, no un 500 aguas abajo.
+        # A malformed tenant_id raises ValidationError here, not a 500 downstream.
         return User(username=username, tenant_id=tenant_id)
     except (jwt.PyJWTError, ValidationError):
         raise credentials_exception

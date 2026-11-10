@@ -11,26 +11,43 @@ A multi-agent RAG system built with **LangGraph**, **FastAPI** and **PostgreSQL 
 
 It was developed against the author's own résumé, and the supervisor prompt is written for that: questions like *"What did Bryan build at Betterfly?"* followed by *"and in which years?"*. Any Markdown, text, PDF or image file can be ingested.
 
-> Code comments and the internal technical audit are written in Spanish.
+> The corpus is in Spanish. The system answers in the language of the question, Spanish or English.
 
 ---
 
 ## Architecture
 
 ```mermaid
-graph TD
+flowchart LR
     U([User]) -->|JWT| API[FastAPI]
-    API --> C{Semantic cache hit?}
-    C -->|yes| R([Cached answer])
-    C -->|no| S[Supervisor<br/>intent + query rewriting]
-    S -->|greeting / out of scope / tool| E([Direct answer])
-    S -->|knowledge search| I[Researcher<br/>hybrid search + re-ranking + GraphRAG]
-    I --> G[Generator<br/>structured answer, streamed]
-    G -->|needs more context<br/>and a wider search can help| I
-    G -->|done| A([Answer via SSE])
-    A -.-> B1[Background: LLM-as-a-judge]
-    A -.-> B2[Background: long-term memory]
-    A -.-> B3[Semantic cache write]
+    API --> C{Semantic<br/>cache}
+    C -->|hit| R([Cached<br/>answer])
+    C -->|miss| S
+
+    MEM[Long-term memory<br/>top-3 user facts] -.-> S
+
+    subgraph G[" LangGraph agent graph "]
+        S[Supervisor<br/>intent · multi-query<br/>HyDE]
+        I[Researcher<br/>hybrid search<br/>re-ranking · GraphRAG]
+        W[Generator<br/>structured answer<br/>streamed]
+        S -->|knowledge| I --> W
+        W -. needs more<br/>context .-> I
+    end
+
+    S -->|greeting · out of<br/>scope · tool| D([Direct answer])
+    W --> A([Answer<br/>over SSE])
+    A -.-> BG[After the response<br/>LLM judge · fact<br/>extraction · cache write]
+    DB[(PostgreSQL + pgvector<br/>RLS per tenant)] <--> I
+
+    classDef io fill:#eef2f7,stroke:#64748b,color:#0f172a
+    classDef agent fill:#e0e7ff,stroke:#4f46e5,color:#1e1b4b
+    classDef store fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef bg fill:#fef3c7,stroke:#d97706,color:#451a03
+    class U,API,C,R,D,A,MEM io
+    class S,I,W agent
+    class DB store
+    class BG bg
+    style G fill:none,stroke:#818cf8,stroke-width:1.5px,stroke-dasharray:5 4
 ```
 
 A request goes through these steps:
@@ -59,6 +76,8 @@ A request goes through these steps:
 
 - The tenant is set per transaction with `set_config(..., true)`, so a pooled connection never leaks the previous user's tenant.
 - The tenant travels with an HMAC-SHA256 signature. A `SECURITY DEFINER` function checks it against a key the application role cannot read, so even an injected SQL statement cannot switch tenants.
+
+**Corpus language vs. question language.** Full-text search uses PostgreSQL's `spanish` configuration because the corpus is in Spanish. So the supervisor always writes its search queries and the HyDE paragraph in Spanish, whatever language the question is in, and the generator answers in the language of the question.
 
 **Cache policy.** Only confident answers (≥ 0.5, no missing context) to knowledge questions or greetings are cached. Requests with conversation history skip the cache: a follow-up like "and in which years?" means different things in different conversations.
 
@@ -105,7 +124,7 @@ PYTHONPATH=. uv run streamlit run src/frontend/app.py
 
 Docker Compose reads `TENANT_SIGNING_KEY` from `.env` and refuses to start without it. Keep `DATABASE_URL` on `app_user`: a superuser bypasses Row-Level Security.
 
-The demo has two users, `bryan` and `empresa_x` (password `password123`), each in its own tenant.
+The demo has two users, `bryan` and `company_x` (password `password123`), each in its own tenant.
 
 ## API
 
@@ -170,7 +189,7 @@ tests/                   unit, api, db and evals layers
 
 ## Further reading
 
-- [Technical audit](docs/AUDITORIA_TECNICA.md) (Spanish): every finding found while checking the docs against the code, with its fix and how it was verified.
+- [Technical audit](docs/TECHNICAL_AUDIT.md): every finding found while checking the docs against the code, with its fix and how it was verified.
 
 ## License
 

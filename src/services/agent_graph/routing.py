@@ -1,23 +1,23 @@
-"""Decisiones del grafo que no necesitan ni la base de datos ni el LLM.
+"""Graph decisions that need neither the database nor the LLM.
 
-La ventana de recuperación de cada pasada y las rutas tras el supervisor y el revisor
-(BUG-05). Viven fuera de nodes.py y graph.py para poder comprobarlas sin importar los
-modelos ni los clientes que cargan esos módulos (BUG-07).
+The retrieval window of each pass and the routes after the supervisor and the reviewer
+(BUG-05). They live outside nodes.py and graph.py so they can be checked without
+importing the models and clients those modules load (BUG-07).
 """
 from src.models.requests import MAX_TOP_K_RETRIEVE, MAX_TOP_K_RERANK
-# Import real, no bajo TYPE_CHECKING: LangGraph lee con get_type_hints la anotación de
-# las funciones de ruta al añadir las aristas condicionales. state.py solo arrastra
-# langchain_core (~0,2 s).
+# A real import, not under TYPE_CHECKING: LangGraph reads the annotation of the route
+# functions with get_type_hints when adding the conditional edges. state.py only pulls
+# in langchain_core (~0.2 s).
 from src.services.agent_graph.state import AgentState
 
 
 def retrieval_window(base_retrieve: int, base_rerank: int, iteration: int) -> tuple[int, int]:
-    """Candidatos por variante y documentos tras el re-ranking para la pasada `iteration` (0 = la primera).
+    """Candidates per variant and documents after re-ranking for pass `iteration` (0 = the first).
 
-    Un reintento del ciclo de auto-corrección llega porque el redactor dijo que el
-    contexto no le bastaba, y repetir la misma búsqueda devolvería exactamente lo mismo
-    (BUG-05). En cada reintento se multiplican los candidatos y se deja pasar la mitad
-    más de documentos (redondeando hacia arriba), sin superar los máximos de la API.
+    A retry of the self-correction loop happens because the generator said the context
+    was not enough, and repeating the same search would return exactly the same thing
+    (BUG-05). On each retry the candidates are multiplied and half as many documents
+    again are let through (rounding up), without exceeding the API maximums.
     """
     retrieve_k = min(base_retrieve * (iteration + 1), MAX_TOP_K_RETRIEVE)
     rerank_k = min(base_rerank + (base_rerank + 1) // 2 * iteration, MAX_TOP_K_RERANK)
@@ -26,14 +26,14 @@ def retrieval_window(base_retrieve: int, base_rerank: int, iteration: int) -> tu
 
 def is_retrieval_exhausted(result_sizes: list[int], unique_candidates: int,
                            base_retrieve: int, base_rerank: int, iteration: int) -> bool:
-    """Si reintentar la pasada `iteration` con una ventana más amplia no puede cambiar el contexto.
+    """Whether retrying pass `iteration` with a wider window cannot change the context.
 
-    Reintentar solo tiene sentido si una ventana más amplia puede cambiar el contexto.
-    No puede si ninguna búsqueda llenó su cupo (el corpus no tiene más candidatos) y el
-    redactor ya los recibió todos, ni si la ventana siguiente es igual por los máximos.
+    Retrying only makes sense if a wider window can change the context. It cannot if no
+    search filled its quota (the corpus has no more candidates) and the generator
+    already received all of them, nor if the next window is the same because of the maximums.
 
-    `result_sizes` son los candidatos que devolvió cada variante de la consulta, y
-    `unique_candidates`, los que quedaron tras deduplicar.
+    `result_sizes` are the candidates each query variant returned, and
+    `unique_candidates`, the ones left after deduplication.
     """
     top_k_retrieve, top_k_rerank = retrieval_window(base_retrieve, base_rerank, iteration)
     corpus_exhausted = (all(size < top_k_retrieve for size in result_sizes)
@@ -43,20 +43,20 @@ def is_retrieval_exhausted(result_sizes: list[int], unique_candidates: int,
 
 
 def route_supervisor(state: AgentState) -> str:
-    # Si el supervisor ya generó una respuesta final (saludos, out_of_scope, herramientas)
+    # If the supervisor already produced a final answer (greetings, out_of_scope, tools)
     if state.get("final_answer"):
         return "END"
     return "researcher"
 
 def route_reviewer(state: AgentState) -> str:
-    # Si Claude indicó que requiere más info y no hemos iterado demasiado
+    # If Claude said it needs more info and we have not iterated too much
     if state.get("needs_more_info") and state.get("iterations", 0) < 2:
         if state.get("retrieval_exhausted"):
-            # El reintento repetiría exactamente el mismo contexto: solo añadiría coste.
-            print("⏹️ [Revisor] Falta contexto, pero ampliar la búsqueda no traería nada nuevo. Se termina.")
+            # The retry would repeat exactly the same context: it would only add cost.
+            print("⏹️ [Reviewer] Context is missing, but widening the search would bring nothing new. Ending.")
             return "END"
-        # El investigador amplía la ventana de recuperación en cada reintento
-        # (retrieval_window, más arriba).
-        print("🔄 [Revisor] Falta contexto. Volviendo al Investigador con la búsqueda ampliada...")
+        # The researcher widens the retrieval window on each retry
+        # (retrieval_window, above).
+        print("🔄 [Reviewer] Context is missing. Back to the Researcher with a wider search...")
         return "researcher"
     return "END"

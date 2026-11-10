@@ -1,9 +1,9 @@
-"""Guardián de la capa de lógica pura.
+"""Guard of the pure logic layer.
 
-Los tests de tests/unit/ no deben cargar modelos ni crear clientes de LLM. Basta con
-que alguien añada a un módulo puro una importación de nodes.py o de un servicio para
-que la capa vuelva a tardar ~10 s y a depender del entorno, sin que ningún otro test
-falle. Este lo detecta.
+The tests in tests/unit/ must not load models or create LLM clients. It only takes
+someone adding an import of nodes.py or of a service to a pure module for the layer to
+take ~10 s again and depend on the environment, without any other test failing. This
+one catches it.
 """
 import subprocess
 import sys
@@ -11,8 +11,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-# Todo lo que importan los tests de tests/unit/.
-MODULOS_PUROS = [
+# Everything the tests in tests/unit/ import.
+PURE_MODULES = [
     "src.services.cache_policy",
     "src.services.agent_graph.routing",
     "src.services.history",
@@ -22,20 +22,20 @@ MODULOS_PUROS = [
     "src.models.evaluation",
 ]
 
-PROHIBIDOS = ["sentence_transformers", "flashrank", "anthropic", "langgraph"]
+FORBIDDEN = ["sentence_transformers", "flashrank", "anthropic", "langgraph"]
 
 
-def test_los_modulos_puros_no_cargan_modelos_ni_clientes():
-    # En un subproceso limpio: en este proceso, otros tests o plugins pueden haber
-    # importado ya cualquiera de los prohibidos.
-    codigo = (
+def test_pure_modules_load_no_models_or_clients():
+    # In a clean subprocess: in this process, other tests or plugins may already have
+    # imported any of the forbidden ones.
+    code = (
         "import sys\n"
-        f"for m in {MODULOS_PUROS!r}: __import__(m)\n"
-        f"print('PROHIBIDOS=' + ','.join(p for p in {PROHIBIDOS!r} if p in sys.modules))\n"
+        f"for m in {PURE_MODULES!r}: __import__(m)\n"
+        f"print('FORBIDDEN=' + ','.join(p for p in {FORBIDDEN!r} if p in sys.modules))\n"
     )
-    resultado = subprocess.run([sys.executable, "-c", codigo], cwd=REPO, capture_output=True, text=True, timeout=60)
-    assert resultado.returncode == 0, resultado.stderr
-    # Última línea: los módulos pesados imprimen al cargarse ("Cargando modelo...").
-    cargados = resultado.stdout.strip().splitlines()[-1] if resultado.stdout.strip() else ""
-    assert cargados.startswith("PROHIBIDOS="), resultado.stdout
-    assert cargados == "PROHIBIDOS=", f"los módulos puros arrastran: {cargados.removeprefix('PROHIBIDOS=')}"
+    result = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    # Last line: the heavy modules print when they load ("Loading model...").
+    loaded = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    assert loaded.startswith("FORBIDDEN="), result.stdout
+    assert loaded == "FORBIDDEN=", f"pure modules pull in: {loaded.removeprefix('FORBIDDEN=')}"

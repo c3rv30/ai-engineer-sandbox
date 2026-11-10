@@ -33,21 +33,21 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-# Solo tests/: la raíz tiene scripts sueltos test_*.py que hacen peticiones o cargan
-# modelos al importarse (HYG-02).
+# Only tests/: the root used to have loose test_*.py scripts that made requests or
+# loaded models at import time (HYG-02).
 testpaths = ["tests"]
-# Equivale al PYTHONPATH=. con que el README arranca la API y la ingesta.
+# Same as the PYTHONPATH=. the README uses to start the API and the ingestion.
 pythonpath = ["."]
-# deepeval registra un plugin que pytest carga siempre (~1,7 s, importa anthropic y
-# openai). La evaluación de tests/evals/ no lo necesita: assert_test funciona sin él.
+# deepeval registers a plugin that pytest always loads (~1.7 s, it imports anthropic
+# and openai). The evaluation in tests/evals/ does not need it: assert_test works without it.
 addopts = ["--strict-markers", "-p", "no:deepeval"]
 markers = [
-    "db: necesita la base PostgreSQL desechable que levanta tests/db/conftest.py",
-    "eval: evaluación de calidad con juez LLM; solo se recoge con --run-evals",
-    "api: ejercita la API con TestClient y dobles del grafo y de los servicios; no necesita Docker",
+    "db: needs the disposable PostgreSQL database started by tests/db/conftest.py",
+    "eval: quality evaluation with an LLM judge; only collected with --run-evals",
+    "api: exercises the API with TestClient and doubles for the graph and the services; no Docker needed",
 ]
 asyncio_mode = "auto"
-# Un único event loop para toda la sesión: el pool de src/services/db.py es uno por
-# loop, y un loop por test crearía un pool por test sin cerrar los anteriores.
+# A single event loop for the whole session: the pool in src/services/db.py is one per
+# loop, and one loop per test would create a pool per test without closing the previous ones.
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"

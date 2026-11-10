@@ -16,17 +16,17 @@ from src.services.agent_graph.routing import is_retrieval_exhausted, retrieval_w
 
 async def supervisor_node(state: AgentState) -> dict:
     """
-    Analiza la intención de la pregunta y decide qué camino tomar.
+    Analyzes the intent of the question and decides which path to take.
     """
-    print("🤖 [Supervisor] Analizando consulta...")
+    print("🤖 [Supervisor] Analyzing the query...")
     intent = await analyze_query(state["query"], state.get("history", []))
     
-    # Preparamos las variaciones de búsqueda para el investigador
+    # Prepare the search variations for the researcher
     queries = intent.search_queries if intent.search_queries else [state["query"]]
     if intent.hypothetical_document:
         queries.append(intent.hypothetical_document)
         
-    # Si es una charla casual o está fuera de alcance, generamos la respuesta de inmediato
+    # Small talk or out of scope: the answer is produced right away
     if intent.intent_type in ["casual_greeting", "out_of_scope"]:
         return {
             "intent_type": intent.intent_type,
@@ -41,12 +41,12 @@ async def supervisor_node(state: AgentState) -> dict:
     if intent.intent_type == "tool_execution":
         tool_func = TOOLS_REGISTRY.get(intent.tool_name)
         if tool_func:
-            # Las herramientas hacen peticiones HTTP síncronas (requests): en un hilo, para
-            # que el event loop siga atendiendo mientras esperan a la red (PERF-03).
+            # The tools make synchronous HTTP requests (requests): in a thread, so the
+            # event loop keeps serving while they wait on the network (PERF-03).
             tool_result = await asyncio.to_thread(tool_func, **intent.tool_args)
-            ans = f"¡Herramienta ejecutada ({intent.tool_name})! Resultado:\n\n{tool_result}"
+            ans = f"Tool executed ({intent.tool_name})! Result:\n\n{tool_result}"
         else:
-            ans = f"Error: Herramienta '{intent.tool_name}' no encontrada."
+            ans = f"Error: tool '{intent.tool_name}' not found."
             
         return {
             "intent_type": "tool_execution",
@@ -66,26 +66,26 @@ async def supervisor_node(state: AgentState) -> dict:
 
 async def researcher_node(state: AgentState) -> dict:
     """
-    Se encarga de buscar en Postgres Vector y GraphRAG.
+    Searches pgvector and GraphRAG.
     """
-    print("🔍 [Investigador] Buscando contexto en la base de datos...")
+    print("🔍 [Researcher] Searching the database for context...")
     tenant_id = state["tenant_id"]
     queries = state["search_queries"]
-    # La base la fija el cliente en el ChatRequest; un estado construido sin ella (fuera
-    # de la API) usa los mismos valores por defecto que el contrato.
+    # The client sets the base in the ChatRequest; a state built without it (outside
+    # the API) uses the same defaults as the contract.
     base_retrieve = state.get("top_k_retrieve", DEFAULT_TOP_K_RETRIEVE)
     base_rerank = state.get("top_k_rerank", DEFAULT_TOP_K_RERANK)
     iteration = state.get("iterations", 0)
     top_k_retrieve, top_k_rerank = retrieval_window(base_retrieve, base_rerank, iteration)
     if iteration:
-        print(f"🔄 [Investigador] Reintento {iteration}: {top_k_retrieve} candidatos por variante, {top_k_rerank} documentos.")
+        print(f"🔄 [Researcher] Retry {iteration}: {top_k_retrieve} candidates per variant, {top_k_rerank} documents.")
 
-    # 1. Recuperación Vectorial Concurrente
+    # 1. Concurrent vector retrieval
     retrieval_tasks = [retrieve_documents(q, tenant_id, top_k=top_k_retrieve) for q in queries]
     results_lists = await asyncio.gather(*retrieval_tasks)
     vector_candidates = [doc for sublist in results_lists for doc in sublist]
     
-    # Deduplicar
+    # Deduplicate
     seen = set()
     unique_candidates = []
     for doc in vector_candidates:
@@ -116,19 +116,19 @@ async def researcher_node(state: AgentState) -> dict:
 
 async def generator_node(state: AgentState) -> dict:
     """
-    Genera la respuesta final. Actúa también como "Reviewer" básico.
-    Si la respuesta requiere más información, marca el flag.
+    Generates the final answer. It also acts as a basic "Reviewer":
+    if the answer needs more information, it sets the flag.
 
-    Emite el texto según se genera por el canal 'custom' de LangGraph, que es
-    lo que convierte a /chat/stream en streaming real y no en cuatro avisos de
-    progreso. Fuera de un contexto de streaming —por ejemplo bajo el ainvoke
-    de /chat/— el writer es un no-op y el nodo se comporta igual que antes.
+    It emits the text as it is generated on LangGraph's 'custom' channel, which is
+    what makes /chat/stream real streaming rather than four progress notices.
+    Outside a streaming context (for example under the ainvoke of /chat/) the
+    writer is a no-op and the node behaves as before.
     """
-    print("✍️ [Redactor] Generando respuesta estructurada...")
+    print("✍️ [Generator] Generating the structured answer...")
     writer = get_stream_writer()
 
-    # El canal 'messages' del estado no lo escribe ningún nodo, así que el
-    # historial de la conversación viaja por 'history', igual que en el supervisor.
+    # No node writes the state's 'messages' channel, so the conversation history
+    # travels in 'history', as in the supervisor.
     kwargs = dict(
         query=state["query"],
         context=state["documents"],
@@ -136,42 +136,42 @@ async def generator_node(state: AgentState) -> dict:
         history=state.get("history", [])
     )
 
-    # El ciclo de auto-corrección puede traernos aquí por segunda vez. El cliente
-    # solo sabe añadir texto (app.py:118 ignora todo lo que no haga crecer la
-    # cadena), así que el reintento se anuncia y se encadena, nunca reemplaza.
-    es_reintento = state.get("iterations", 0) > 1
-    writer({"delta": "🔄 *Revisor: reescribiendo con el contexto ampliado...*\n\n---\n\n"
-                     if es_reintento else
-                     "✍️ *Redactor estructurando respuesta final...*\n\n---\n\n"})
+    # The self-correction loop can bring us here a second time. The client can only
+    # append text (app.py:118 ignores anything that does not grow the string), so the
+    # retry is announced and chained, it never replaces.
+    is_retry = state.get("iterations", 0) > 1
+    writer({"delta": "🔄 *Reviewer: rewriting with the wider context...*\n\n---\n\n"
+                     if is_retry else
+                     "✍️ *Generator writing the final answer...*\n\n---\n\n"})
 
-    emitido = ""
-    ultimo_parcial = None
+    emitted = ""
+    last_partial = None
     try:
-        async for parcial in generate_answer_stream(**kwargs):
-            ultimo_parcial = parcial
-            texto = parcial.answer or ""
-            # Instructor reemite el objeto completo en cada paso; nos quedamos
-            # con lo nuevo. El texto solo puede crecer.
-            if len(texto) > len(emitido):
-                writer({"delta": texto[len(emitido):]})
-                emitido = texto
+        async for partial in generate_answer_stream(**kwargs):
+            last_partial = partial
+            text = partial.answer or ""
+            # Instructor re-emits the whole object at every step; we keep only what
+            # is new. The text can only grow.
+            if len(text) > len(emitted):
+                writer({"delta": text[len(emitted):]})
+                emitted = text
     except Exception as e:
-        print(f"⚠️ [Redactor] El streaming falló ({type(e).__name__}); se repliega a generación completa.")
-        ultimo_parcial = None
+        print(f"⚠️ [Generator] Streaming failed ({type(e).__name__}); falling back to full generation.")
+        last_partial = None
 
     response = None
-    if ultimo_parcial is not None:
+    if last_partial is not None:
         try:
-            response = StructuredAnswer.model_validate(ultimo_parcial.model_dump())
+            response = StructuredAnswer.model_validate(last_partial.model_dump())
         except ValidationError:
-            # Parcial que nunca cerró el esquema: generación truncada por
-            # max_tokens o corte a media respuesta. No se rellena a mano.
-            print("⚠️ [Redactor] El parcial no completó el esquema; se repliega a generación completa.")
+            # A partial that never completed the schema: generation truncated by
+            # max_tokens or cut off mid-answer. It is not filled in by hand.
+            print("⚠️ [Generator] The partial did not complete the schema; falling back to full generation.")
 
     if response is None:
         response = await generate_answer(**kwargs)
-        # Lo ya emitido es un borrador truncado y el cliente no puede retirarlo,
-        # así que se encadena la respuesta buena en lugar de sustituirla.
+        # What was already emitted is a truncated draft and the client cannot take it
+        # back, so the good answer is chained instead of replacing it.
         writer({"delta": "\n\n---\n\n" + response.answer})
 
     return {

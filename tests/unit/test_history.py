@@ -1,35 +1,35 @@
-"""Regresión del historial de conversación (BUG-03).
+"""Regression of the conversation history (BUG-03).
 
-El historial lo envía el cliente: debe llegar al prompt acotado a los últimos turnos y
-sin que un turno malformado tumbe la petición.
+The client sends the history: it must reach the prompt limited to the last turns and
+without a malformed turn taking down the request.
 """
 import pytest
 
 from src.services.history import format_history
 
 
-def turno(i):
-    return {"role": "user" if i % 2 == 0 else "assistant", "content": f"mensaje {i}"}
+def turn(i):
+    return {"role": "user" if i % 2 == 0 else "assistant", "content": f"message {i}"}
 
 
-def test_ventana_de_los_cuatro_ultimos_turnos_en_orden():
-    resultado = format_history([turno(i) for i in range(6)])
-    lineas = resultado.splitlines()
-    assert lineas[0] == "Historial reciente de la conversación:"
-    assert lineas[1:] == ["- USER: mensaje 2", "- ASSISTANT: mensaje 3", "- USER: mensaje 4", "- ASSISTANT: mensaje 5"]
+def test_window_of_the_last_four_turns_in_order():
+    result = format_history([turn(i) for i in range(6)])
+    lines = result.splitlines()
+    assert lines[0] == "Recent conversation history:"
+    assert lines[1:] == ["- USER: message 2", "- ASSISTANT: message 3", "- USER: message 4", "- ASSISTANT: message 5"]
 
 
-def test_turnos_malformados_se_descartan():
-    historial = [
-        "no soy un diccionario",
+def test_malformed_turns_are_dropped():
+    history = [
+        "not a dictionary",
         {"role": "user"},
-        {"content": "sin rol"},
+        {"content": "no role"},
         {"role": "user", "content": ""},
-        {"role": "assistant", "content": "válido"},
+        {"role": "assistant", "content": "valid"},
     ]
-    assert format_history(historial) == "Historial reciente de la conversación:\n- ASSISTANT: válido\n"
+    assert format_history(history) == "Recent conversation history:\n- ASSISTANT: valid\n"
 
 
-@pytest.mark.parametrize("historial", [None, [], [{"role": "user"}], ["texto", 3]])
-def test_historial_vacio_o_inutilizable(historial):
-    assert format_history(historial) == ""
+@pytest.mark.parametrize("history", [None, [], [{"role": "user"}], ["text", 3]])
+def test_empty_or_unusable_history(history):
+    assert format_history(history) == ""

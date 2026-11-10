@@ -11,10 +11,10 @@ load_dotenv()
 
 async def check_semantic_cache(tenant_id: uuid.UUID, query: str, threshold: float = 0.85) -> Optional[dict]:
     """
-    Busca si existe una pregunta muy similar (cosine similarity > threshold) en caché.
-    Retorna el diccionario JSON con la respuesta si es un Cache Hit, sino None.
+    Looks for a very similar question (cosine similarity > threshold) in the cache.
+    Returns the JSON dictionary with the answer on a Cache Hit, otherwise None.
     """
-    # Se calcula antes de tomar conexión: es trabajo de CPU y retendría una del pool.
+    # Computed before taking a connection: it is CPU work and would hold one from the pool.
     emb_str = to_pgvector(await embed(query))
 
     # <= operator computes distance. Similarity = 1 - distance.
@@ -28,7 +28,7 @@ async def check_semantic_cache(tenant_id: uuid.UUID, query: str, threshold: floa
         row = await conn.fetchrow(sql, emb_str)
 
     if row and row['similarity'] >= threshold:
-        print(f"✅ Cache Hit! Similitud: {row['similarity']:.4f}")
+        print(f"✅ Cache Hit! Similarity: {row['similarity']:.4f}")
         return json.loads(row['response_json'])
 
     print("❌ Cache Miss")
@@ -37,9 +37,9 @@ async def check_semantic_cache(tenant_id: uuid.UUID, query: str, threshold: floa
 
 async def save_semantic_cache(tenant_id: uuid.UUID, query: str, response_dict: dict):
     """
-    Guarda la pregunta y su respuesta en la tabla de caché semántico.
+    Stores the question and its answer in the semantic cache table.
     """
-    # Se calcula antes de tomar conexión: es trabajo de CPU y retendría una del pool.
+    # Computed before taking a connection: it is CPU work and would hold one from the pool.
     emb_str = to_pgvector(await embed(query))
 
     sql = """

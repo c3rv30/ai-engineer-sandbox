@@ -3,61 +3,61 @@ import os
 import shutil
 from pathlib import Path
 from typing import List
-# Antes de importar FlashRank: arrastra onnxruntime, que trae compilado un cliente de
-# telemetría con su propio hilo. Si una de sus respuestas HTTP llega cuando el
-# intérprete ya está cerrando, el proceso aborta con código 134 ("recursive_mutex lock
-# failed") después de haber terminado su trabajo (HYG-09). Desactivarla después de
-# importar FlashRank no basta: el hilo ya está en marcha.
+# Before importing FlashRank: it pulls in onnxruntime, which ships a compiled telemetry
+# client with its own thread. If one of its HTTP responses arrives when the interpreter
+# is already shutting down, the process aborts with code 134 ("recursive_mutex lock
+# failed") after finishing its work (HYG-09). Disabling it after importing FlashRank is
+# not enough: the thread is already running.
 try:
     import onnxruntime
 
     onnxruntime.disable_telemetry_events()
-except Exception as e:  # onnxruntime llega como dependencia de FlashRank, no propia
-    print(f"No se pudo desactivar la telemetría de onnxruntime: {type(e).__name__}")
+except Exception as e:  # onnxruntime comes as a FlashRank dependency, not our own
+    print(f"Could not disable onnxruntime telemetry: {type(e).__name__}")
 
 from flashrank import Ranker, RerankRequest
 from flashrank.Config import model_file_map
 from langfuse import observe
 from src.models.search import SearchResult, RerankedResult
 
-# El modelo por defecto de FlashRank (ms-marco-TinyBERT-L-2-v2) devolvía 404,
-# por lo que se fija explícitamente el Cross-Encoder MiniLM-L-12-v2.
+# FlashRank's default model (ms-marco-TinyBERT-L-2-v2) returned 404,
+# so the MiniLM-L-12-v2 cross-encoder is pinned explicitly.
 RERANKER_MODEL = "ms-marco-MiniLM-L-12-v2"
 
-# FlashRank cachea en /tmp por defecto, que es almacenamiento volátil. Como decide
-# si descargar comprobando solo si existe el DIRECTORIO del modelo (Ranker.py:80),
-# un directorio que sobreviva vacío hace que no vuelva a descargar nunca y que la
-# app deje de arrancar de forma permanente. Por eso el caché va a una ruta estable.
+# FlashRank caches in /tmp by default, which is volatile storage. Since it decides
+# whether to download by checking only that the model DIRECTORY exists (Ranker.py:80),
+# a directory that survives empty means it never downloads again and the app stops
+# starting for good. That is why the cache goes to a stable path.
 RERANKER_CACHE_DIR = os.getenv(
     "RERANKER_CACHE_DIR", str(Path.home() / ".cache" / "flashrank")
 )
 
 def _ensure_model_cache() -> None:
-    """Sanea un directorio de modelo presente pero sin el archivo dentro.
+    """Cleans up a model directory that exists without the model file inside.
 
-    Cubre el caso que FlashRank no contempla: descarga interrumpida, disco lleno o
-    limpieza parcial del caché. Sin esto, FlashRank daría el modelo por descargado
-    y onnxruntime fallaría con NO_SUCHFILE en tiempo de importación.
+    Covers the case FlashRank does not handle: an interrupted download, a full disk or
+    a partial cleanup of the cache. Without this, FlashRank would consider the model
+    downloaded and onnxruntime would fail with NO_SUCHFILE at import time.
     """
     model_dir = Path(RERANKER_CACHE_DIR) / RERANKER_MODEL
     model_file = model_dir / model_file_map[RERANKER_MODEL]
     if model_dir.exists() and not model_file.exists():
-        print(f"Caché del re-ranker incompleto en {model_dir}; se fuerza la re-descarga.")
+        print(f"Incomplete re-ranker cache in {model_dir}; forcing a new download.")
         shutil.rmtree(model_dir, ignore_errors=True)
 
-print("Cargando modelo local de Re-ranker (FlashRank)...")
+print("Loading local re-ranker model (FlashRank)...")
 _ensure_model_cache()
 ranker = Ranker(model_name=RERANKER_MODEL, cache_dir=RERANKER_CACHE_DIR)
 
 @observe(name="cross_encoder_rerank")
 async def rerank_documents(query: str, candidates: List[SearchResult], top_k: int = 3) -> List[RerankedResult]:
     """
-    Toma los candidatos del retriever y los re-ordena usando FlashRank (Cross-Encoder).
+    Takes the retriever's candidates and reorders them with FlashRank (cross-encoder).
     """
     if not candidates:
         return []
         
-    # Formato esperado por FlashRank: lista de diccionarios con 'id' y 'text'
+    # Format FlashRank expects: a list of dictionaries with 'id' and 'text'
     passages = []
     for c in candidates:
         passages.append({
@@ -69,10 +69,10 @@ async def rerank_documents(query: str, candidates: List[SearchResult], top_k: in
         
     rerankrequest = RerankRequest(query=query, passages=passages)
     
-    # FlashRank es sincrónico
+    # FlashRank is synchronous
     results = await asyncio.to_thread(ranker.rerank, rerankrequest)
     
-    # FlashRank devuelve la lista reordenada con una llave 'score' nueva
+    # FlashRank returns the reordered list with a new 'score' key
     final_results = []
     for r in results[:top_k]:
         final_results.append(RerankedResult(

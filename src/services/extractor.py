@@ -9,7 +9,7 @@ from src.models.search import RerankedResult
 from src.models.structured import StructuredAnswer
 from src.services.history import format_history
 
-# Inicializar cliente Anthropic y envolverlo con instructor
+# Initialize the Anthropic client and wrap it with instructor
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 client = instructor.from_anthropic(anthropic_client)
 
@@ -23,34 +23,38 @@ def _build_prompt(
     user_profile: str = "",
     history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
-    """Construye el prompt del redactor.
+    """Builds the generator's prompt.
 
-    Lo comparten la versión completa y la de streaming a propósito: tener dos
-    copias del prompt fue justamente la causa de que la instrucción anti-texto-plano
-    (documentada en TROUBLESHOOTING.md §6) viviera solo en una de las dos.
+    The full and the streaming versions share it on purpose: having two copies of the
+    prompt is exactly why the anti-plain-text instruction (documented in
+    TROUBLESHOOTING.md §6) lived in only one of them.
     """
     context_text = ""
     for idx, c in enumerate(context, 1):
-        context_text += f"\n--- Documento {idx} (ID: {c.id}) ---\n{c.content}\n"
+        context_text += f"\n--- Document {idx} (ID: {c.id}) ---\n{c.content}\n"
 
     history_str = format_history(history)
 
+    # The language rule goes after the Context on purpose: placed before a long
+    # Spanish context, an English question was answered in Spanish.
     return f"""
-    Eres un asistente experto de AI Engineering. Tu objetivo es responder a la pregunta del usuario utilizando ÚNICAMENTE la información provista en el Contexto.
-    Si la información no es suficiente, debes indicarlo en 'requires_more_info'.
-    Cita las fuentes usando el ID del documento.
+    You are an expert AI Engineering assistant. Your goal is to answer the user's question using ONLY the information provided in the Context.
+    If the information is not enough, say so in 'requires_more_info'.
+    Cite the sources using the document ID.
 
-    MUY IMPORTANTE: Debes devolver tu respuesta estructurada. Si vas a escribir un análisis largo, pon todo el texto formateado en Markdown dentro del campo 'answer'. No respondas con texto plano fuera del esquema JSON.
+    VERY IMPORTANT: You must return your answer structured. If you are going to write a long analysis, put all the text, formatted in Markdown, inside the 'answer' field. Do not answer with plain text outside the JSON schema.
 
     {user_profile}
 
     {history_str}
-    Pregunta: {query}
+    Question: {query}
 
-    IMPORTANTE: Si la pregunta depende del historial (ej: "¿Y en qué años?"), resuelve primero a qué se refiere usando el turno anterior y responde ÚNICAMENTE sobre ese referente. El Contexto puede traer documentos de más: no lo vuelques entero, responde solo lo que se te preguntó.
+    IMPORTANT: If the question depends on the history (e.g. "And in which years?"), first resolve what it refers to using the previous turn and answer ONLY about that referent. The Context may bring extra documents: do not dump all of it, answer only what you were asked.
 
-    Contexto:
+    Context:
     {context_text}
+
+    LANGUAGE: Write 'answer' in the same language as the Question above ("{query}"), even though the Context may be in another language. Translate what you take from the Context; keep proper nouns, company names and technology names as they are.
     """
 
 
@@ -62,15 +66,15 @@ async def generate_answer(
     history: Optional[List[Dict[str, str]]] = None,
 ) -> StructuredAnswer:
     """
-    Toma la pregunta y el contexto recuperado, e invoca a Anthropic (Claude)
-    para generar una respuesta estructurada validada con Pydantic.
+    Takes the question and the retrieved context and calls Anthropic (Claude) to
+    generate a structured answer validated with Pydantic.
 
-    Recibe también el historial: sin él, una pregunta de seguimiento como
-    "¿Y en qué años?" no tiene referente, y el redactor responde volcando todo
-    el contexto recuperado en lugar de acotarse a lo que se le preguntó.
+    It also receives the history: without it, a follow-up question like
+    "And in which years?" has no referent, and the generator answers by dumping all
+    the retrieved context instead of sticking to what it was asked.
 
-    El camino normal es `generate_answer_stream`; esta versión queda como
-    repliegue cuando el streaming no logra completar el objeto estructurado.
+    The normal path is `generate_answer_stream`; this version remains as the
+    fallback when streaming does not manage to complete the structured object.
     """
     response = await client.messages.create(
         model=MODEL,
@@ -92,12 +96,12 @@ async def generate_answer_stream(
     history: Optional[List[Dict[str, str]]] = None,
 ) -> AsyncGenerator[Partial[StructuredAnswer], None]:
     """
-    Igual que `generate_answer`, pero emitiendo el objeto según se construye.
+    Same as `generate_answer`, but emitting the object as it is built.
 
-    Emite el modelo parcial, no su JSON serializado, porque quien consume
-    necesita tanto el texto incremental (para el SSE) como el objeto final
-    (para el estado del grafo). Los primeros parciales llegan con `answer` a
-    None: el modelo aún no ha abierto ese campo.
+    It emits the partial model, not its serialized JSON, because the consumer needs
+    both the incremental text (for SSE) and the final object (for the graph state).
+    The first partials arrive with `answer` set to None: the model has not opened
+    that field yet.
     """
     response = await client.messages.create(
         model=MODEL,

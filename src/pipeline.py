@@ -8,37 +8,37 @@ from langfuse import observe
 
 @observe(name="rag_pipeline")
 async def run_search_pipeline(query: str):
-    print(f"\n[1] Pregunta: '{query}'")
+    print(f"\n[1] Question: '{query}'")
     
-    print("\n[2] Etapa 1: Recuperación Vectorial (Retriever)...")
+    print("\n[2] Stage 1: Vector retrieval (Retriever)...")
     candidates = await retrieve_documents(query, top_k=5)
     
     for i, c in enumerate(candidates, 1):
-        print(f"  -> {i}. Score: {c.score:.4f} | Texto: {c.content[:60].replace(chr(10), ' ')}...")
+        print(f"  -> {i}. Score: {c.score:.4f} | Text: {c.content[:60].replace(chr(10), ' ')}...")
         
-    print("\n[3] Etapa 2: Re-ranking con Cross-Encoder (FlashRank)...")
+    print("\n[3] Stage 2: Re-ranking with a cross-encoder (FlashRank)...")
     best_results = await rerank_documents(query, candidates, top_k=3)
     
     for i, r in enumerate(best_results, 1):
-        print(f"  -> {i}. Re-Rank Score: {r.rerank_score:.4f} | Vector Score: {r.score:.4f} | Texto: {r.content[:60].replace(chr(10), ' ')}...")
+        print(f"  -> {i}. Re-Rank Score: {r.rerank_score:.4f} | Vector Score: {r.score:.4f} | Text: {r.content[:60].replace(chr(10), ' ')}...")
         
-    print("\n[4] Etapa 3: Generación Estructurada (Anthropic + Instructor)...")
+    print("\n[4] Stage 3: Structured generation (Anthropic + Instructor)...")
     if not best_results:
-        print("No se encontraron documentos.")
+        print("No documents found.")
         return
         
     answer = await generate_answer(query, best_results)
     
-    print("\n================ RESPUESTA ESTRUCTURADA ================")
-    # Para imprimir el modelo pydantic de forma bonita
+    print("\n================ STRUCTURED ANSWER ================")
+    # Pretty-print the Pydantic model
     print(json.dumps(answer.model_dump(), indent=2, ensure_ascii=False))
-    print("========================================================\n")
+    print("===================================================\n")
     
-    print("\n[¡Completado!]")
+    print("\n[Done!]")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prueba el pipeline completo de RAG")
-    parser.add_argument("query", help="Pregunta a buscar y responder")
+    parser = argparse.ArgumentParser(description="Run the full RAG pipeline")
+    parser.add_argument("query", help="Question to search for and answer")
     args = parser.parse_args()
     
     asyncio.run(run_search_pipeline(args.query))

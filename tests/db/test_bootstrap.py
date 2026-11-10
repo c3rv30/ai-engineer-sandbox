@@ -1,26 +1,26 @@
-"""La base se crea desde volumen vacío con los scripts de sql/ (BUG-04)."""
+"""The database is created from an empty volume with the sql/ scripts (BUG-04)."""
 
-TABLAS = {"documents", "knowledge_graph", "semantic_cache", "user_memory", "rag_evaluations"}
+TABLES = {"documents", "knowledge_graph", "semantic_cache", "user_memory", "rag_evaluations"}
 
 
-async def test_base_recien_creada(superuser):
-    tablas = {r["relname"] for r in await superuser.fetch(
+async def test_freshly_created_database(superuser):
+    tables = {r["relname"] for r in await superuser.fetch(
         "SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'")}
-    assert tablas == TABLAS
+    assert tables == TABLES
 
-    forzadas = await superuser.fetch(
+    forced = await superuser.fetch(
         "SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace"
         " AND relkind = 'r' AND relrowsecurity AND relforcerowsecurity")
-    assert {r["relname"] for r in forzadas} == TABLAS
+    assert {r["relname"] for r in forced} == TABLES
 
-    politicas = await superuser.fetch("SELECT tablename, qual FROM pg_policies WHERE schemaname = 'public'")
-    assert {r["tablename"] for r in politicas} == TABLAS
-    assert all("app_current_tenant()" in r["qual"] for r in politicas)
+    policies = await superuser.fetch("SELECT tablename, qual FROM pg_policies WHERE schemaname = 'public'")
+    assert {r["tablename"] for r in policies} == TABLES
+    assert all("app_current_tenant()" in r["qual"] for r in policies)
 
     assert await superuser.fetchval("SELECT count(*) FROM tenant_security.signing_key") == 1
     assert await superuser.fetchval("SELECT rolname FROM pg_roles WHERE rolname = 'app_user'") == "app_user"
 
 
-async def test_la_base_de_pruebas_esta_vacia(superuser):
-    for tabla in TABLAS:
-        assert await superuser.fetchval(f"SELECT count(*) FROM {tabla}") == 0, tabla
+async def test_the_test_database_is_empty(superuser):
+    for table in TABLES:
+        assert await superuser.fetchval(f"SELECT count(*) FROM {table}") == 0, table

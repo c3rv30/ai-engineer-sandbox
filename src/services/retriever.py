@@ -12,13 +12,16 @@ from src.services.embeddings import embed, to_pgvector
 @observe(name="hybrid_search")
 async def retrieve_documents(query: str, tenant_id: uuid.UUID, top_k: int = 5) -> List[SearchResult]:
     """
-    Realiza una búsqueda híbrida usando Reciprocal Rank Fusion (RRF).
-    Combina Vector Search (HNSW) con Full-Text Search (BM25).
+    Runs a hybrid search using Reciprocal Rank Fusion (RRF).
+    Combines vector search (HNSW) with full-text search (ts_rank).
     """
-    # El embedding se calcula antes de tomar conexión: es trabajo de CPU y retendría
-    # una conexión del pool sin usarla.
+    # The embedding is computed before taking a connection: it is CPU work and would
+    # hold a pooled connection without using it.
     emb_str = to_pgvector(await embed(query))
 
+    # 'spanish' is the language of the corpus, not of the question: the fts column is
+    # generated with the same configuration (sql/01_init.sql). The supervisor writes its
+    # search queries in Spanish for that reason (router.py).
     sql_query = """
     WITH vector_search AS (
         SELECT id, content, metadata,
@@ -46,7 +49,7 @@ async def retrieve_documents(query: str, tenant_id: uuid.UUID, top_k: int = 5) -
     LIMIT $2;
     """
 
-    # La conexión llega con el tenant fijado, así que la Row Level Security (RLS) filtra.
+    # The connection arrives with the tenant set, so Row Level Security (RLS) filters.
     async with tenant_connection(tenant_id) as conn:
         rows = await conn.fetch(sql_query, emb_str, top_k, query)
 

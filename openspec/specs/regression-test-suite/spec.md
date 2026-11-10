@@ -1,271 +1,271 @@
 ## Purpose
 
-Red de regresión automática que impide que vuelvan los defectos corregidos en la auditoría técnica. Separa la lógica que se comprueba sin infraestructura del aislamiento multi-tenant, que solo se puede demostrar contra un Postgres real.
+Automatic regression net that keeps the defects fixed in the technical audit from coming back. It separates the logic that can be checked without infrastructure from multi-tenant isolation, which can only be demonstrated against a real Postgres.
 
 ## Requirements
 
-### Requirement: Ejecución de la capa de lógica pura sin infraestructura
-La capa de lógica pura MUST ejecutarse sin base de datos, sin llamadas a un LLM, sin archivo `.env` y sin cargar modelos de embeddings ni de re-ranking. Se MUST poder ejecutar sola, sin la capa de base de datos.
+### Requirement: Pure logic layer runs without infrastructure
+The pure logic layer MUST run without a database, without LLM calls, without a `.env` file and without loading the embedding or re-ranking models. It MUST be possible to run it alone, without the database layer.
 
-#### Scenario: Clon sin configuración
-- **WHEN** se ejecuta solo la capa de lógica pura en un clon del repositorio sin `.env` y sin Docker
-- **THEN** todos sus tests se recogen y se ejecutan, y ninguno falla por configuración ausente, conexión rechazada o importación
+#### Scenario: Clone without configuration
+- **WHEN** only the pure logic layer is run in a clone of the repository without `.env` and without Docker
+- **THEN** all its tests are collected and run, and none fails because of missing configuration, a refused connection or an import
 
-#### Scenario: Sin carga de modelos
-- **WHEN** se ejecuta solo la capa de lógica pura
-- **THEN** no se carga el modelo de embeddings ni el de re-ranking, y la ejecución completa tarda segundos, no el tiempo de importar la API
+#### Scenario: No model loading
+- **WHEN** only the pure logic layer is run
+- **THEN** neither the embedding model nor the re-ranking model is loaded, and the whole run takes seconds, not the time it takes to import the API
 
-### Requirement: Base de datos desechable para la capa de base de datos
-La capa de base de datos MUST ejecutarse contra una base PostgreSQL creada para la ejecución desde volumen vacío, con los scripts de inicialización del repositorio, y MUST eliminarla al terminar, incluido su volumen. MUST NOT conectarse a la base de desarrollo ni modificarla, ni tocar su volumen de datos.
+### Requirement: Disposable database for the database layer
+The database layer MUST run against a PostgreSQL database created for the run from an empty volume, with the repository's init scripts, and MUST delete it at the end, volume included. It MUST NOT connect to the development database or modify it, or touch its data volume.
 
-#### Scenario: Base recién creada
-- **WHEN** se ejecuta la capa de base de datos
-- **THEN** los tests corren contra una base inicializada en esa misma ejecución, con el esquema, las políticas y los roles de los scripts del repositorio
+#### Scenario: Freshly created database
+- **WHEN** the database layer is run
+- **THEN** the tests run against a database initialized in that same run, with the schema, policies and roles from the repository's scripts
 
-#### Scenario: Limpieza al terminar
-- **WHEN** termina la ejecución, con tests superados o fallidos
-- **THEN** no queda ni el contenedor ni el volumen de la base de pruebas
+#### Scenario: Cleanup at the end
+- **WHEN** the run ends, with tests passed or failed
+- **THEN** neither the container nor the volume of the test database remains
 
-#### Scenario: La base de desarrollo no se toca
-- **WHEN** se ejecuta la suite completa con la base de desarrollo en marcha
-- **THEN** los recuentos de la base de desarrollo y su volumen son idénticos antes y después
+#### Scenario: The development database is not touched
+- **WHEN** the full suite is run with the development database running
+- **THEN** the counts of the development database and its volume are identical before and after
 
-### Requirement: Fallo explícito sin Docker
-Si la capa de base de datos está seleccionada y no se puede levantar la base desechable, la ejecución MUST fallar con un mensaje que indique la causa. MUST NOT saltarse los tests de esa capa ni darlos por superados.
+### Requirement: Explicit failure without Docker
+If the database layer is selected and the disposable database cannot be started, the run MUST fail with a message stating the cause. It MUST NOT skip that layer's tests or count them as passed.
 
-#### Scenario: Docker no disponible
-- **WHEN** se ejecuta la suite completa sin Docker disponible
-- **THEN** la ejecución termina con fallo y el mensaje indica que no se pudo levantar la base de pruebas
+#### Scenario: Docker not available
+- **WHEN** the full suite is run without Docker available
+- **THEN** the run ends in failure and the message says the test database could not be started
 
-#### Scenario: Selección explícita de la capa pura
-- **WHEN** se ejecuta solo la capa de lógica pura sin Docker disponible
-- **THEN** la ejecución termina con éxito, porque la capa de base de datos no estaba seleccionada
+#### Scenario: Explicit selection of the pure layer
+- **WHEN** only the pure logic layer is run without Docker available
+- **THEN** the run ends successfully, because the database layer was not selected
 
-### Requirement: Alcance de la recolección
-La ejecución por defecto MUST recoger tests solo del directorio de tests del proyecto, y MUST excluir las evaluaciones de calidad con juez LLM.
+### Requirement: Collection scope
+The default run MUST collect tests only from the project's tests directory, and MUST exclude the quality evaluations with an LLM judge.
 
-#### Scenario: Scripts sueltos de la raíz
-- **WHEN** se ejecuta la suite por defecto
-- **THEN** no se recoge ni se importa ningún script `test_*.py` de la raíz del repositorio
+#### Scenario: Loose scripts in the root
+- **WHEN** the default suite is run
+- **THEN** no `test_*.py` script in the repository root is collected or imported
 
-#### Scenario: Evaluaciones de calidad excluidas
-- **WHEN** se ejecuta la suite por defecto
-- **THEN** la evaluación de calidad existente no se ejecuta, y solo corre cuando se selecciona de forma explícita
+#### Scenario: Quality evaluations excluded
+- **WHEN** the default suite is run
+- **THEN** the existing quality evaluation does not run, and only runs when explicitly selected
 
-### Requirement: Cada test de regresión demuestra que detecta su defecto
-Cada test asociado a un hallazgo de la auditoría MUST fallar cuando se reintroduce el defecto que protege. Esa comprobación MUST quedar hecha antes de dar el test por bueno.
+### Requirement: Every regression test proves it catches its defect
+Every test tied to an audit finding MUST fail when the defect it protects against is reintroduced. That check MUST be done before the test is accepted.
 
-#### Scenario: Control negativo
-- **WHEN** se reintroduce en el código el comportamiento anterior a la corrección de un hallazgo
-- **THEN** al menos un test asociado a ese hallazgo falla
+#### Scenario: Negative control
+- **WHEN** the behavior from before a finding's fix is reintroduced into the code
+- **THEN** at least one test tied to that finding fails
 
-### Requirement: Regresión de la política de caché
-La suite MUST verificar que solo se lee o escribe en el caché semántico cuando la respuesta es reutilizable para cualquier petición parecida (`BUG-02`, `BUG-06`, `BUG-10`).
+### Requirement: Cache policy regression
+The suite MUST verify that the semantic cache is only read or written when the answer is reusable for any similar request (`BUG-02`, `BUG-06`, `BUG-10`).
 
-#### Scenario: Intención no cacheable
-- **WHEN** la intención de la respuesta es una herramienta, un tema fuera de alcance o un valor no reconocido
-- **THEN** la respuesta no es cacheable
+#### Scenario: Non-cacheable intent
+- **WHEN** the intent of the answer is a tool, an out-of-scope topic or an unrecognized value
+- **THEN** the answer is not cacheable
 
-#### Scenario: Respuesta insuficiente
-- **WHEN** la respuesta indica que necesita más información, o su confianza es menor que 0,5 o falta
-- **THEN** la respuesta no es cacheable
+#### Scenario: Insufficient answer
+- **WHEN** the answer says it needs more information, or its confidence is below 0.5 or missing
+- **THEN** the answer is not cacheable
 
-#### Scenario: Respuesta reutilizable
-- **WHEN** la intención es de búsqueda de conocimiento o un saludo, no necesita más información y su confianza es al menos 0,5
-- **THEN** la respuesta es cacheable
+#### Scenario: Reusable answer
+- **WHEN** the intent is a knowledge search or a greeting, it needs no more information and its confidence is at least 0.5
+- **THEN** the answer is cacheable
 
-#### Scenario: Parámetros de recuperación propios
-- **WHEN** una petición trae `top_k_retrieve` o `top_k_rerank` distintos de 15 y 10
-- **THEN** la petición no puede leer ni escribir caché
+#### Scenario: Custom retrieval parameters
+- **WHEN** a request carries `top_k_retrieve` or `top_k_rerank` other than 15 and 10
+- **THEN** the request may neither read nor write the cache
 
-#### Scenario: Petición con historial
-- **WHEN** una petición con los parámetros por defecto trae historial de conversación
-- **THEN** la petición no puede leer ni escribir caché
+#### Scenario: Request with history
+- **WHEN** a request with the default parameters carries conversation history
+- **THEN** the request may neither read nor write the cache
 
-#### Scenario: Parámetros fuera de rango
-- **WHEN** una petición trae `top_k_retrieve` fuera de 1–50 o `top_k_rerank` fuera de 1–20
-- **THEN** la petición se rechaza por validación
+#### Scenario: Out-of-range parameters
+- **WHEN** a request carries `top_k_retrieve` outside 1-50 or `top_k_rerank` outside 1-20
+- **THEN** the request is rejected by validation
 
-### Requirement: Regresión del ciclo de auto-corrección
-La suite MUST verificar que cada reintento amplía la búsqueda dentro de los máximos, y que no se reintenta cuando ampliarla no puede cambiar el contexto (`BUG-05`).
+### Requirement: Self-correction loop regression
+The suite MUST verify that each retry widens the search within the maximums, and that there is no retry when widening it cannot change the context (`BUG-05`).
 
-#### Scenario: Ampliación por reintento
-- **WHEN** se calcula la ventana de recuperación con base 15/10 en la primera pasada y en los dos reintentos siguientes
-- **THEN** la ventana es 15/10, 30/15 y 45/20
+#### Scenario: Widening per retry
+- **WHEN** the retrieval window is computed with base 15/10 on the first pass and the next two retries
+- **THEN** the window is 15/10, 30/15 and 45/20
 
-#### Scenario: Tope en los máximos
-- **WHEN** la ampliación superaría los máximos de la API
-- **THEN** la ventana queda en 50 candidatos y 20 documentos
+#### Scenario: Cap at the maximums
+- **WHEN** the widening would exceed the API maximums
+- **THEN** the window stays at 50 candidates and 20 documents
 
-#### Scenario: Ventana saturada
-- **WHEN** la ventana del siguiente reintento sería igual a la actual
-- **THEN** la recuperación se considera agotada
+#### Scenario: Saturated window
+- **WHEN** the next retry's window would be the same as the current one
+- **THEN** retrieval is considered exhausted
 
-#### Scenario: Corpus agotado
-- **WHEN** ninguna búsqueda llenó su cupo de candidatos y el redactor ya recibió todos los candidatos únicos
-- **THEN** la recuperación se considera agotada
+#### Scenario: Exhausted corpus
+- **WHEN** no search filled its candidate quota and the generator already received all the unique candidates
+- **THEN** retrieval is considered exhausted
 
-#### Scenario: Decisión del revisor
-- **WHEN** el redactor pide más información
-- **THEN** se vuelve a buscar solo si la recuperación no está agotada y no se han hecho ya dos pasadas; en cualquier otro caso, se termina
+#### Scenario: Reviewer decision
+- **WHEN** the generator asks for more information
+- **THEN** the search runs again only if retrieval is not exhausted and two passes have not been made yet; otherwise, it ends
 
-### Requirement: Regresión del historial de conversación
-La suite MUST verificar que el historial que envía el cliente se convierte en contexto para el prompt de forma acotada y robusta ante turnos malformados (`BUG-03`).
+### Requirement: Conversation history regression
+The suite MUST verify that the history the client sends becomes context for the prompt in a bounded way that is robust to malformed turns (`BUG-03`).
 
-#### Scenario: Ventana de turnos
-- **WHEN** el historial tiene más de cuatro turnos
-- **THEN** solo se incluyen los cuatro últimos, en orden
+#### Scenario: Turn window
+- **WHEN** the history has more than four turns
+- **THEN** only the last four are included, in order
 
-#### Scenario: Turnos malformados
-- **WHEN** el historial contiene turnos que no son objetos o que no tienen rol o contenido
-- **THEN** esos turnos se descartan sin error y el resto se incluye
+#### Scenario: Malformed turns
+- **WHEN** the history contains turns that are not objects or that have no role or content
+- **THEN** those turns are dropped without error and the rest are included
 
-#### Scenario: Historial vacío o inutilizable
-- **WHEN** el historial está vacío o ninguno de sus turnos es utilizable
-- **THEN** el resultado es una cadena vacía, sin encabezado
+#### Scenario: Empty or unusable history
+- **WHEN** the history is empty or none of its turns is usable
+- **THEN** the result is an empty string, with no header
 
-### Requirement: Regresión del nombre de archivo en la ingesta
-La suite MUST verificar que el nombre de archivo que envía el cliente se reduce a un nombre sin componentes de ruta antes de usarse como origen del documento (`SEC-04`).
+### Requirement: Ingestion file name regression
+The suite MUST verify that the file name the client sends is reduced to a name without path components before being used as the document's origin (`SEC-04`).
 
-#### Scenario: Recorrido de directorios
-- **WHEN** el nombre enviado contiene componentes de ruta con `/` o `\`, incluido `..`
-- **THEN** el origen registrado es solo el último componente
+#### Scenario: Directory traversal
+- **WHEN** the name sent contains path components with `/` or `\`, including `..`
+- **THEN** the recorded origin is only the last component
 
-### Requirement: Regresión de la firma del tenant
-La suite MUST verificar que la firma que calcula la aplicación coincide con la que verifica la base de datos para el mismo tenant y la misma clave (`SEC-05`).
+### Requirement: Tenant signature regression
+The suite MUST verify that the signature the application computes matches the one the database verifies for the same tenant and the same key (`SEC-05`).
 
-#### Scenario: Firma coincidente
-- **WHEN** la aplicación firma un tenant con una clave, y la base calcula el HMAC-SHA256 del mismo tenant con esa clave
-- **THEN** las dos firmas son idénticas
+#### Scenario: Matching signature
+- **WHEN** the application signs a tenant with a key, and the database computes the HMAC-SHA256 of the same tenant with that key
+- **THEN** the two signatures are identical
 
-### Requirement: Regresión de los límites de las puntuaciones del evaluador
-La suite MUST verificar que una puntuación fuera del rango 0–1 se rechaza en la validación de la respuesta del juez, antes de llegar a la base de datos (`DOC-02`).
+### Requirement: Evaluator score bounds regression
+The suite MUST verify that a score outside the 0-1 range is rejected when validating the judge's answer, before it reaches the database (`DOC-02`).
 
-#### Scenario: Puntuación fuera de rango
-- **WHEN** alguna de las tres puntuaciones es menor que 0 o mayor que 1
-- **THEN** la validación falla
+#### Scenario: Out-of-range score
+- **WHEN** any of the three scores is below 0 or above 1
+- **THEN** validation fails
 
-### Requirement: Regresión del aislamiento entre tenants
-La suite MUST verificar, contra la base desechable y con el rol de la aplicación, que un tenant solo ve sus filas cuando el contexto va firmado con la clave correcta (`SEC-05`, `SEC-03`, `PERF-01`). Cada comprobación de aislamiento MUST ir acompañada de un control positivo desde el tenant dueño de los datos.
+### Requirement: Tenant isolation regression
+The suite MUST verify, against the disposable database and with the application role, that a tenant only sees its rows when the context is signed with the right key (`SEC-05`, `SEC-03`, `PERF-01`). Every isolation check MUST come with a positive control from the tenant that owns the data.
 
-#### Scenario: Contexto firmado válido
-- **WHEN** el rol de la aplicación consulta con el contexto de un tenant firmado con la clave correcta
-- **THEN** ve las filas de ese tenant y ninguna de otro
+#### Scenario: Valid signed context
+- **WHEN** the application role queries with a tenant's context signed with the right key
+- **THEN** it sees that tenant's rows and none from another
 
-#### Scenario: Contexto sin firma o con firma falsa
-- **WHEN** el rol de la aplicación fija un tenant sin firma, o con una firma que no corresponde a la clave
-- **THEN** no ve ninguna fila
+#### Scenario: Unsigned context or fake signature
+- **WHEN** the application role sets a tenant without a signature, or with a signature that does not match the key
+- **THEN** it sees no rows
 
-#### Scenario: Tenant reescrito desde la propia sentencia
-- **WHEN** una consulta con contexto firmado de un tenant reescribe el tenant desde la propia sentencia
-- **THEN** no obtiene filas del otro tenant
+#### Scenario: Tenant rewritten from the statement itself
+- **WHEN** a query with a tenant's signed context rewrites the tenant from the statement itself
+- **THEN** it gets no rows from the other tenant
 
-#### Scenario: Inyección en la consulta de GraphRAG
-- **WHEN** la búsqueda en el grafo de conocimiento recibe como pregunta el payload de inyección de `SEC-03`
-- **THEN** no devuelve relaciones de otro tenant
+#### Scenario: Injection in the GraphRAG query
+- **WHEN** the knowledge graph search receives the `SEC-03` injection payload as the question
+- **THEN** it returns no relations from another tenant
 
-#### Scenario: Palabras de la pregunta como datos, no como SQL
-- **WHEN** la búsqueda en el grafo recibe, con un tokenizador que deja pasar comillas, una tautología o una palabra con apóstrofo
-- **THEN** no devuelve relaciones que no coincidan con ninguna palabra, y no falla con un error de sintaxis SQL
+#### Scenario: Question words as data, not as SQL
+- **WHEN** the graph search receives, with a tokenizer that lets quotes through, a tautology or a word with an apostrophe
+- **THEN** it returns no relations that match no word, and does not fail with an SQL syntax error
 
-#### Scenario: Conexión reutilizada del pool
-- **WHEN** una conexión usada con el contexto de un tenant vuelve al pool y otra operación la reutiliza sin fijar contexto
-- **THEN** esa operación no ve filas del tenant anterior
+#### Scenario: Connection reused from the pool
+- **WHEN** a connection used with a tenant's context goes back to the pool and another operation reuses it without setting a context
+- **THEN** that operation sees no rows from the previous tenant
 
-#### Scenario: Contexto local a la transacción
-- **WHEN** termina la transacción en la que la aplicación fijó el contexto de un tenant, aunque la conexión no se restablezca al volver al pool
-- **THEN** la conexión ya no conserva ni el tenant ni su firma
+#### Scenario: Transaction-local context
+- **WHEN** the transaction in which the application set a tenant's context ends, even if the connection is not reset when it goes back to the pool
+- **THEN** the connection no longer keeps the tenant or its signature
 
-### Requirement: Regresión de los privilegios del rol de la aplicación
-La suite MUST verificar, contra la base desechable, que el rol de la aplicación no tiene más privilegios que los que necesita (`HYG-07`, `SEC-07`).
+### Requirement: Application role privileges regression
+The suite MUST verify, against the disposable database, that the application role has no more privileges than it needs (`HYG-07`, `SEC-07`).
 
-#### Scenario: Tabla nueva en el esquema público
-- **WHEN** el superusuario crea una tabla nueva en el esquema público
-- **THEN** el rol de la aplicación no puede leerla
+#### Scenario: New table in the public schema
+- **WHEN** the superuser creates a new table in the public schema
+- **THEN** the application role cannot read it
 
-#### Scenario: Creación de esquemas
-- **WHEN** el rol de la aplicación intenta crear un esquema
-- **THEN** la operación se deniega por falta de privilegios
+#### Scenario: Schema creation
+- **WHEN** the application role tries to create a schema
+- **THEN** the operation is denied for lack of privileges
 
-#### Scenario: Ajustes propios del rol
-- **WHEN** se inspeccionan los ajustes por defecto guardados para el rol de la aplicación
-- **THEN** no hay ninguno
+#### Scenario: The role's own settings
+- **WHEN** the default settings stored for the application role are inspected
+- **THEN** there are none
 
-#### Scenario: Clave de firma inaccesible
-- **WHEN** el rol de la aplicación intenta leer la clave de firma
-- **THEN** la operación se deniega
+#### Scenario: Unreachable signing key
+- **WHEN** the application role tries to read the signing key
+- **THEN** the operation is denied
 
-### Requirement: Ejecución de la capa de API con dobles
-La capa de API MUST ejercitar la aplicación HTTP completa sin conectarse a PostgreSQL y sin llamar a ningún LLM, sustituyendo el grafo de agentes y los servicios de datos por dobles que registran con qué se los llamó. MUST NOT requerir Docker, y MUST poder ejecutarse sola.
+### Requirement: API layer runs with doubles
+The API layer MUST exercise the full HTTP application without connecting to PostgreSQL and without calling any LLM, replacing the agent graph and the data services with doubles that record what they were called with. It MUST NOT require Docker, and MUST be possible to run alone.
 
-#### Scenario: Sin infraestructura
-- **WHEN** se ejecuta solo la capa de API sin Docker y sin la base de datos en marcha
-- **THEN** todos sus tests pasan, y ninguno abre una conexión a PostgreSQL ni llama a un LLM
+#### Scenario: No infrastructure
+- **WHEN** only the API layer is run without Docker and without the database running
+- **THEN** all its tests pass, and none opens a connection to PostgreSQL or calls an LLM
 
-#### Scenario: La autenticación no se dobla
-- **WHEN** un test de esta capa envía una petición autenticada
-- **THEN** el token se valida con el código real de autenticación, no con un doble
+#### Scenario: Authentication is not doubled
+- **WHEN** a test in this layer sends an authenticated request
+- **THEN** the token is validated with the real authentication code, not with a double
 
-### Requirement: Regresión de la autenticación en el borde
-La suite MUST verificar que la API rechaza con 401 cualquier token que no pueda validarse, y que no arranca sin una clave de firma utilizable (`SEC-01`, `SEC-02`).
+### Requirement: Edge authentication regression
+The suite MUST verify that the API rejects with 401 any token that cannot be validated, and that it does not start without a usable signing key (`SEC-01`, `SEC-02`).
 
-#### Scenario: Token firmado con otra clave
-- **WHEN** se envía un token bien formado pero firmado con una clave distinta de la del servidor
-- **THEN** la respuesta es 401 y no se ejecuta el grafo
+#### Scenario: Token signed with another key
+- **WHEN** a well-formed token signed with a key other than the server's is sent
+- **THEN** the response is 401 and the graph does not run
 
-#### Scenario: Token sin usuario o sin tenant
-- **WHEN** el token válido no trae usuario o no trae tenant
-- **THEN** la respuesta es 401
+#### Scenario: Token without user or tenant
+- **WHEN** the valid token carries no user or no tenant
+- **THEN** the response is 401
 
-#### Scenario: Tenant malformado en el token
-- **WHEN** el token trae un `tenant_id` que no es un UUID, por ejemplo una cadena con comillas o un fragmento de SQL
-- **THEN** la respuesta es 401, no un error interno, y el valor no llega a la capa de datos
+#### Scenario: Malformed tenant in the token
+- **WHEN** the token carries a `tenant_id` that is not a UUID, for example a string with quotes or an SQL fragment
+- **THEN** the response is 401, not an internal error, and the value does not reach the data layer
 
-#### Scenario: Petición sin token
-- **WHEN** se llama a un endpoint protegido sin cabecera de autorización
-- **THEN** la respuesta es 401
+#### Scenario: Request without token
+- **WHEN** a protected endpoint is called without an authorization header
+- **THEN** the response is 401
 
-#### Scenario: Clave de firma ausente o demasiado corta
-- **WHEN** se carga la API sin clave de firma JWT, o con una de menos de 32 caracteres
-- **THEN** el arranque falla con un error que explica la causa, en lugar de usar un valor por defecto
+#### Scenario: Missing or too short signing key
+- **WHEN** the API is loaded without a JWT signing key, or with one shorter than 32 characters
+- **THEN** startup fails with an error explaining the cause, instead of using a default value
 
-### Requirement: Regresión del detalle de los errores internos
-La suite MUST verificar que, ante un fallo interno, el cliente recibe un mensaje genérico con un identificador, y que el detalle queda únicamente en el log (`SEC-06`). Los mensajes escritos para el cliente MUST conservarse.
+### Requirement: Internal error detail regression
+The suite MUST verify that, on an internal failure, the client gets a generic message with an identifier, and that the detail stays only in the log (`SEC-06`). Messages written for the client MUST be kept.
 
-#### Scenario: Fallo interno en una respuesta normal
-- **WHEN** el grafo lanza una excepción cuyo texto contiene una ruta del servidor o un mensaje del proveedor del LLM
-- **THEN** el cliente recibe un error genérico con un identificador, ese texto no aparece en la respuesta, y el log contiene la traza con el mismo identificador
+#### Scenario: Internal failure in a normal answer
+- **WHEN** the graph raises an exception whose text contains a server path or a message from the LLM provider
+- **THEN** the client gets a generic error with an identifier, that text does not appear in the response, and the log contains the traceback with the same identifier
 
-#### Scenario: Fallo interno durante el stream
-- **WHEN** el grafo lanza una excepción mientras se emite el stream
-- **THEN** el evento entregado lleva un error genérico con identificador, y el texto de la excepción no aparece
+#### Scenario: Internal failure during the stream
+- **WHEN** the graph raises an exception while the stream is being emitted
+- **THEN** the delivered event carries a generic error with an identifier, and the exception text does not appear
 
-#### Scenario: Fallo interno en la ingesta
-- **WHEN** la ingesta de un archivo permitido falla con una excepción que nombra la ruta temporal del servidor
-- **THEN** el cliente recibe un error genérico con identificador y esa ruta no aparece en la respuesta
+#### Scenario: Internal failure in ingestion
+- **WHEN** the ingestion of an allowed file fails with an exception that names the server's temporary path
+- **THEN** the client gets a generic error with an identifier and that path does not appear in the response
 
-#### Scenario: Mensajes escritos para el cliente
-- **WHEN** la petición se rechaza por una causa prevista, como una extensión de archivo no permitida o que el grafo no devuelva respuesta final
-- **THEN** el cliente recibe el mensaje específico de esa causa, no el genérico
+#### Scenario: Messages written for the client
+- **WHEN** the request is rejected for an expected cause, such as a disallowed file extension or the graph not returning a final answer
+- **THEN** the client gets the specific message for that cause, not the generic one
 
-### Requirement: Regresión del objeto persistido en el caché
-La suite MUST verificar que lo que se manda a persistir en el caché es la respuesta estructurada limpia, sin los mensajes de progreso que el stream añade para la interfaz (`BUG-01`).
+### Requirement: Cached object regression
+The suite MUST verify that what is sent to be stored in the cache is the clean structured answer, without the progress messages the stream adds for the interface (`BUG-01`).
 
-#### Scenario: Lo que se guarda frente a lo que se emite
-- **WHEN** una petición de stream que puede usar caché termina con una respuesta cacheable
-- **THEN** el objeto que recibe el servicio de caché no contiene ningún mensaje de progreso, mientras que el texto emitido al cliente sí los lleva
+#### Scenario: What is stored versus what is emitted
+- **WHEN** a stream request that can use the cache ends with a cacheable answer
+- **THEN** the object the cache service receives contains no progress message, while the text emitted to the client does carry them
 
-#### Scenario: El evaluador recibe la respuesta limpia
-- **WHEN** esa misma petición programa la evaluación de la respuesta
-- **THEN** el texto que recibe el evaluador tampoco contiene mensajes de progreso
+#### Scenario: The evaluator gets the clean answer
+- **WHEN** that same request schedules the evaluation of the answer
+- **THEN** the text the evaluator receives contains no progress messages either
 
-### Requirement: Regresión de la respuesta del stream en todos los caminos
-La suite MUST verificar que `/chat/stream/` entrega la respuesta final también cuando la resuelve el supervisor, sin pasar por el redactor (`BUG-09`).
+### Requirement: Stream answer regression on every path
+The suite MUST verify that `/chat/stream/` delivers the final answer also when the supervisor resolves it, without going through the generator (`BUG-09`).
 
-#### Scenario: Saludo, tema fuera de alcance o herramienta
-- **WHEN** el supervisor resuelve la petición por sí mismo, como en un saludo, un tema fuera de alcance o la ejecución de una herramienta
-- **THEN** el último evento del stream contiene la respuesta, y no solo las líneas de progreso
+#### Scenario: Greeting, out-of-scope topic or tool
+- **WHEN** the supervisor resolves the request by itself, as with a greeting, an out-of-scope topic or a tool call
+- **THEN** the stream's last event contains the answer, and not just the progress lines
 
-#### Scenario: Respuesta del redactor
-- **WHEN** la petición la resuelve el redactor emitiendo su texto token a token
-- **THEN** el último evento contiene la respuesta completa una sola vez, sin duplicarla
+#### Scenario: Generator answer
+- **WHEN** the request is resolved by the generator emitting its text token by token
+- **THEN** the last event contains the full answer exactly once, without duplicating it

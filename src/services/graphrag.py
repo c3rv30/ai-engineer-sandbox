@@ -23,14 +23,17 @@ anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 client = instructor.from_anthropic(anthropic_client)
 
 async def extract_knowledge_graph(chunk_text: str) -> List[Triplet]:
-    """Extrae entidades y relaciones de un texto usando un LLM."""
+    """Extracts entities and relations from a text using an LLM."""
+    # The nodes are later matched by keyword against the words of the question
+    # (retrieve_subgraph), so they keep the language and spelling of the text.
     prompt = f"""
-    Eres un experto en GraphRAG. Extrae un grafo de conocimiento del siguiente texto.
-    Identifica las entidades principales (personas, tecnologías, empresas, conceptos) y sus relaciones.
-    Devuelve los resultados en formato de tripletas (NODO ORIGEN, RELACIÓN, NODO DESTINO).
-    Si no hay relaciones claras, devuelve una lista vacía.
+    You are a GraphRAG expert. Extract a knowledge graph from the following text.
+    Identify the main entities (people, technologies, companies, concepts) and their relations.
+    Return the results as triples (SOURCE NODE, RELATION, TARGET NODE).
+    Write the nodes and relations in the same language as the text, keeping names exactly as they appear.
+    If there are no clear relations, return an empty list.
     
-    Texto: {chunk_text}
+    Text: {chunk_text}
     """
     try:
         response = await client.messages.create(
@@ -41,11 +44,11 @@ async def extract_knowledge_graph(chunk_text: str) -> List[Triplet]:
         )
         return response.triplets
     except Exception as e:
-        print(f"Error extrayendo grafo: {e}")
+        print(f"Error extracting the graph: {e}")
         return []
 
 async def insert_knowledge_graph(tenant_id: uuid.UUID, chunk_id: str, triplets: List[Triplet]):
-    """Guarda las tripletas extraídas en la BDD bajo el tenant actual."""
+    """Stores the extracted triples in the DB under the current tenant."""
     if not triplets:
         return
         
@@ -58,20 +61,20 @@ async def insert_knowledge_graph(tenant_id: uuid.UUID, chunk_id: str, triplets: 
         await conn.executemany(insert_query, records)
 
 async def retrieve_subgraph(tenant_id: uuid.UUID, query: str) -> str:
-    """Busca en el grafo de conocimiento nodos relevantes a la query de forma difusa."""
+    """Fuzzy search of the knowledge graph for nodes relevant to the query."""
     async with tenant_connection(tenant_id) as conn:
         
-        # Extraemos palabras clave de la query para buscar nodos en el grafo
-        # Esto es un naive approach, idealmente usaríamos el LLM para extraer las entidades de la pregunta.
+        # Extract keywords from the query to look up nodes in the graph
+        # This is a naive approach; ideally the LLM would extract the entities from the question.
         import re
         words = [w.lower() for w in re.findall(r'\w+', query) if len(w) > 3]
         if not words:
             return ""
             
-        # Buscar relaciones donde el origen o destino coincida con alguna palabra de la pregunta
-        # Usamos ILIKE para coincidencia parcial. Las palabras vienen de texto del usuario,
-        # así que viajan como parámetro y nunca dentro del SQL: la seguridad de la consulta
-        # no puede depender de lo que deje pasar el regex de arriba.
+        # Find relations whose source or target matches any word of the question
+        # ILIKE gives a partial match. The words come from user text, so they travel as
+        # a parameter and never inside the SQL: the safety of the query cannot depend
+        # on what the regex above lets through.
         patterns = [f"%{word}%" for word in words]
         sql_query = """
         SELECT source_node, relation, target_node
@@ -85,7 +88,7 @@ async def retrieve_subgraph(tenant_id: uuid.UUID, query: str) -> str:
         if not rows:
             return ""
             
-        graph_text = "Contexto Estructural (GraphRAG):\n"
+        graph_text = "Structural context (GraphRAG):\n"
         for r in rows:
             graph_text += f"- [{r['source_node']}] --({r['relation']})--> [{r['target_node']}]\n"
             

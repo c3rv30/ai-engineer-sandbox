@@ -1,49 +1,49 @@
-"""Política del caché semántico: qué peticiones lo usan y qué respuestas se guardan.
+"""Semantic cache policy: which requests use it and which answers are stored.
 
-Vive fuera de src/api/routers/chat.py para poder comprobarla sin importar el grafo, los
-modelos ni los clientes de Anthropic (BUG-07). Solo depende de src.models.
+It lives outside src/api/routers/chat.py so it can be checked without importing the
+graph, the models or the Anthropic clients (BUG-07). It depends only on src.models.
 """
 from src.models.requests import ChatRequest, DEFAULT_TOP_K_RETRIEVE, DEFAULT_TOP_K_RERANK
 
-# Solo se cachean respuestas que sigan valiendo la próxima vez que alguien pregunte
-# algo parecido. El caché se consulta antes que el supervisor y compara por similitud,
-# así que una herramienta cacheada devolvería datos viejos o de otra consulta (el
-# precio de bitcoin a quien pregunta por ethereum), y un 'out_of_scope' contestaría a
-# otra pregunta. Es una lista blanca porque intent_type lo escribe el LLM como texto
-# libre: un valor inesperado no debe acabar en caché.
+# Only answers that will still hold the next time someone asks something similar are
+# cached. The cache is checked before the supervisor and matches by similarity, so a
+# cached tool call would return stale data or another query's data (the bitcoin price
+# to someone asking about ethereum), and an 'out_of_scope' would answer a different
+# question. It is an allowlist because intent_type is free text written by the LLM:
+# an unexpected value must not end up in the cache.
 CACHEABLE_INTENTS = {"knowledge_search", "casual_greeting"}
 MIN_CACHE_CONFIDENCE = 0.5
 
 
 def is_cacheable(intent_type: str | None, answer: dict) -> bool:
-    # Tampoco se fija para siempre una respuesta que el propio sistema da por insuficiente.
+    # Nor is an answer the system itself considers insufficient kept forever.
     return (intent_type in CACHEABLE_INTENTS
             and not answer.get("requires_more_info")
             and (answer.get("confidence_score") or 0) >= MIN_CACHE_CONFIDENCE)
 
 
 def uses_default_retrieval(request: ChatRequest) -> bool:
-    # El caché se indexa solo por la pregunta. Una respuesta obtenida con otros top_k no
-    # es intercambiable con la de los valores por defecto, así que esas peticiones ni
-    # leen ni escriben caché.
+    # The cache is keyed only by the question. An answer obtained with other top_k values
+    # is not interchangeable with the one from the defaults, so those requests neither
+    # read nor write the cache.
     return (request.top_k_retrieve == DEFAULT_TOP_K_RETRIEVE
             and request.top_k_rerank == DEFAULT_TOP_K_RERANK)
 
 
 def is_cache_eligible(request: ChatRequest) -> bool:
-    """Si esta petición puede leer o escribir caché.
+    """Whether this request may read or write the cache.
 
-    El caché se indexa solo por el texto de la pregunta, y desde BUG-03 la respuesta
-    depende también del historial: "¿Y en qué años fue eso?" significa cosas distintas
-    según el turno anterior. Dos conversaciones que terminan en el mismo seguimiento
-    tienen similitud 1,0 y comparten entrada (BUG-10). Reproducido contra la API real:
-    un seguimiento sobre Itaú/Kabeli recibía los años de MisterGas, presentados como
-    "Según el historial anterior" —un historial que no era el del usuario—.
+    The cache is keyed only by the question text, and since BUG-03 the answer also
+    depends on the history: "And in which years was that?" means different things
+    depending on the previous turn. Two conversations that end in the same follow-up
+    have similarity 1.0 and share an entry (BUG-10). Reproduced against the real API:
+    a follow-up about Itaú/Kabeli got the years of MisterGas, presented as "According
+    to the previous history", a history that was not the user's.
 
-    Así que una petición con historial ni lee ni escribe caché, igual que una con
-    top_k propios. La alternativa —indexar por la consulta que ya resolvió el
-    supervisor— conservaría el caché en los seguimientos, pero solo cierra el defecto
-    si el supervisor incrusta siempre el referente completo, y obliga a consultar el
-    caché después de él, pagando su llamada al LLM también en los aciertos.
+    So a request with history neither reads nor writes the cache, like one with its
+    own top_k. The alternative (keying by the query the supervisor already resolved)
+    would keep the cache for follow-ups, but it only closes the defect if the
+    supervisor always embeds the full referent, and it forces the cache to be checked
+    after the supervisor, paying for its LLM call on hits too.
     """
     return uses_default_retrieval(request) and not request.history
