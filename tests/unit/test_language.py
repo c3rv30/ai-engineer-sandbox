@@ -52,6 +52,30 @@ def test_too_little_text_is_undetermined(text):
     assert detect_language(text) is None
 
 
+
+def test_spanish_proper_nouns_do_not_flip_an_english_answer():
+    # One of the eval's answers, which the whole-text detector took for Spanish: the
+    # degrees keep their Spanish names, as the generator's order asks.
+    answer = (
+        "## Education and Certifications\n\n### Education\n"
+        "- **Diplomado en Inteligencia Artificial** (Diploma in Artificial Intelligence)\n"
+        "  - Universidad Católica de Chile, Santiago, Chile\n  - October 2025 – May 2026\n\n"
+        "- **Ingeniería en Informática** (Engineering in Computer Science)\n"
+        "  - Universidad Tecnológica de Chile INACAP, Santiago, Chile\n  - 2009 - 2015\n\n"
+        "- **Gestión de proyectos con metodologías Ágiles Scrum y enfoques Lean** "
+        "(Project Management with Agile Scrum Methodologies and Lean Approaches)\n"
+        "  - MiriadaX, Santiago, Chile\n  - 2017\n\n### Certifications\n"
+        "- **AWS Certified Solutions Architect – Associate** (In preparation)\n"
+        "  - Currently validating advanced knowledge in core cloud services, infrastructure "
+        "automation, Serverless, and secure design under the AWS Well-Architected Framework"
+    )
+    assert detect_language(answer) == "en"
+
+
+def test_half_and_half_is_undetermined():
+    assert detect_language(SPANISH_ANSWER + "\n\n" + ENGLISH_ANSWER) is None
+
+
 def test_code_does_not_count_as_english():
     # Only code and a URL: no prose left to judge.
     answer = "```python\nfor doc in documents:\n    return doc.content\n```\nhttps://github.com/c3rv30"

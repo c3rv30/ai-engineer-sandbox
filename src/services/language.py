@@ -8,6 +8,7 @@ measures exactly the signal production records.
 It loads no LLM client and no embedding model, so the pure logic layer can import it.
 """
 import re
+from collections import Counter
 from dataclasses import dataclass
 from functools import cache
 from typing import Optional
@@ -21,6 +22,13 @@ SUPPORTED_LANGUAGES = {"es": "Spanish", "en": "English"}
 # answer full of English technology names comes out close to the middle, and a false
 # mismatch would keep a good answer out of the cache.
 MIN_RELATIVE_DISTANCE = 0.25
+# The language covering most of the letters wins, and it must cover at least this share,
+# or the answer is undetermined. Judging the whole text at once let a few long Spanish
+# proper nouns outweigh English prose: an English answer listing "Diplomado en
+# Inteligencia Artificial (Diploma in Artificial Intelligence)" came out as Spanish with
+# full confidence, 3 of 200 answers of the eval. In those 200, the right language never
+# covered less than 62%.
+MIN_SHARE = 0.6
 # With fewer letters than this, even a clear language is a guess ("Hi!" or "OK" come
 # out as English with 0.7-0.9 confidence).
 MIN_LETTERS = 20
@@ -69,10 +77,21 @@ def detect_language(text: Optional[str]) -> Optional[str]:
     if not text:
         return None
     prose = _URL.sub(" ", _CODE.sub(" ", text))
-    if sum(c.isalpha() for c in prose) < MIN_LETTERS:
+    if _letters(prose) < MIN_LETTERS:
         return None
-    language = _detector().detect_language_of(prose)
-    return language.iso_code_639_1.name.lower() if language else None
+    letters = Counter()
+    for segment in _detector().detect_multiple_languages_of(prose):
+        letters[segment.language] += _letters(prose[segment.start_index:segment.end_index])
+    if not letters:
+        return None
+    language, covered = letters.most_common(1)[0]
+    if covered / sum(letters.values()) < MIN_SHARE:
+        return None
+    return language.iso_code_639_1.name.lower()
+
+
+def _letters(text: str) -> int:
+    return sum(c.isalpha() for c in text)
 
 
 def check_answer_language(expected: Optional[str], answer: Optional[str]) -> LanguageCheck:
