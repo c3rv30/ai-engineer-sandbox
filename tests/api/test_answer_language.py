@@ -4,6 +4,8 @@ The supervisor decides the language with a closed field, and the generator gets 
 order naming it instead of a rule to work out. These modules create LLM clients on
 import, which is why the checks live in this layer and not in tests/unit/.
 """
+import logging
+
 import pytest
 from pydantic import ValidationError
 
@@ -62,3 +64,86 @@ def test_the_order_follows_the_decision_not_the_question(app_module):
 def test_generator_rejects_an_unsupported_language(app_module):
     with pytest.raises(ValueError):
         build_prompt("")
+
+
+# --- Safety net at the endpoints: a signal, never a gate ---
+
+ENGLISH = ("Bryan worked at Itaú as a Data Engineer between 2019 and 2021, where he designed "
+           "data pipelines with Airflow and Spark.")
+SPANISH = ("Bryan trabajó en Itaú como Data Engineer entre 2019 y 2021, donde diseñó "
+           "pipelines de datos con Airflow y Spark.")
+MISMATCH = "Answer language mismatch"
+
+
+def ask(api, endpoint):
+    r = api.client.post(endpoint, json={"query": "What did he do at Itaú?"}, headers=api.header())
+    assert r.status_code == 200
+    return api.events(r) if endpoint.endswith("stream/") else r.json()
+
+
+@pytest.mark.parametrize("endpoint", ["/chat/", "/chat/stream/"])
+def test_mismatch_is_logged_and_not_cached(api, caplog, endpoint):
+    from tests.api.doubles import generator_script
+
+    api.script(generator_script(SPANISH, language="en"))
+    with caplog.at_level(logging.WARNING):
+        got = ask(api, endpoint)
+
+    # The client gets the answer as it came, with no notice and no retry.
+    final = got[-1] if isinstance(got, list) else got
+    assert SPANISH in final["answer"] and "error" not in final
+    assert caplog.text.count(MISMATCH) == 1
+    assert "expected=en detected=es" in caplog.text
+    assert api.record.cache_writes == []
+    assert api.record.evaluation_languages == [("en", "es")]
+
+
+@pytest.mark.parametrize("endpoint", ["/chat/", "/chat/stream/"])
+def test_matching_answer_is_cached_as_before(api, caplog, endpoint):
+    from tests.api.doubles import generator_script
+
+    api.script(generator_script(ENGLISH, language="en"))
+    with caplog.at_level(logging.WARNING):
+        ask(api, endpoint)
+
+    assert MISMATCH not in caplog.text
+    assert len(api.record.cache_writes) == 1
+    assert api.record.evaluation_languages == [("en", "en")]
+
+
+def test_mismatch_does_not_change_the_stream(api):
+    # The same script with the matching decision: the events must be identical.
+    from tests.api.doubles import generator_script
+
+    api.script(generator_script(SPANISH, language="en"))
+    mismatched = ask(api, "/chat/stream/")
+    api.script(generator_script(SPANISH, language="es"))
+    matching = ask(api, "/chat/stream/")
+    assert mismatched == matching
+
+
+@pytest.mark.parametrize("endpoint", ["/chat/", "/chat/stream/"])
+def test_tool_answer_is_not_checked(api, caplog, endpoint):
+    from tests.api.doubles import supervisor_script
+
+    # A Spanish question answered with the fixed English template.
+    api.script(supervisor_script("Tool executed (get_current_time)! Result:\n\nThe current time is 10:42.",
+                                 intent_type="tool_execution", language="es"))
+    with caplog.at_level(logging.WARNING):
+        ask(api, endpoint)
+    assert MISMATCH not in caplog.text
+
+
+@pytest.mark.parametrize("endpoint", ["/chat/", "/chat/stream/"])
+def test_a_failing_detector_does_not_break_the_answer(api, monkeypatch, caplog, endpoint):
+    from tests.api.doubles import generator_script
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("detector failed")
+
+    monkeypatch.setattr(api._chat, "check_answer_language", broken)
+    api.script(generator_script(ENGLISH, language="en"))
+    got = ask(api, endpoint)
+    final = got[-1] if isinstance(got, list) else got
+    assert ENGLISH in final["answer"] and "error" not in final
+    assert "Answer language check failed" in caplog.text

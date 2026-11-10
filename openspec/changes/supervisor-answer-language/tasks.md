@@ -19,12 +19,12 @@
 
 ## 4. Non-blocking safety net (`BUG-11`)
 
-- [ ] 4.1 Add the `language_mismatch` keyword to `is_cacheable` (D6) and the "Answer in the wrong language" scenario to `tests/unit/test_cache_policy.py`; verify that the existing cache tests pass unchanged, and run the negative control by ignoring the keyword
-- [ ] 4.2 Add the nullable `expected_language` and `detected_language` columns with their `CHECK` to `rag_evaluations` in `sql/01_init.sql`, and write the idempotent `sql/migrations/apply_answer_language.sql`; verify with a test in `tests/db/` that `app_user` can insert both languages and `NULL`, and that `'pt'` is rejected
-- [ ] 4.3 Give `evaluate_rag_response` the two optional keyword arguments and insert them; verify that the database test from 4.2 passes with a row written by the evaluator's own SQL
-- [ ] 4.4 In both endpoints of `chat.py`, run `check_answer_language` on the clean answer when the intent is not `tool_execution`, then log the mismatch with `logger.warning`, pass `language_mismatch` to `is_cacheable`, and pass both languages to the evaluator (D5). In streaming, take `answer_language` from the supervisor's update and the text from `final_dict`, never from the accumulated text
-- [ ] 4.5 Write the API tests from the spec scenarios "Safety net at the endpoints" and "Matching answer at the endpoints", on `/chat/` and `/chat/stream/`: identical events and status for the client, one warning, no cache write on a mismatch, both languages received by the evaluator double, and no check for a tool answer. Run the negative control: remove the `language_mismatch` argument in `chat.py`, check that a test fails, and restore it
-- [ ] 4.6 Run the full suite with `uv run pytest`; verify that it passes, and note the test count and time in the commit
+- [x] 4.1 Add the `language_mismatch` keyword to `is_cacheable` (D6) and the "Answer in the wrong language" scenario to `tests/unit/test_cache_policy.py`; verify that the existing cache tests pass unchanged, and run the negative control by ignoring the keyword
+- [x] 4.2 Add the nullable `expected_language` and `detected_language` columns with their `CHECK` to `rag_evaluations` in `sql/01_init.sql`, and write the idempotent `sql/migrations/apply_answer_language.sql`; verify with a test in `tests/db/` that `app_user` can insert both languages and `NULL`, and that `'pt'` is rejected
+- [x] 4.3 Give `evaluate_rag_response` the two optional keyword arguments and insert them; verify that the database test from 4.2 passes with a row written by the evaluator's own SQL
+- [x] 4.4 In both endpoints of `chat.py`, run `check_answer_language` on the clean answer when the intent is not `tool_execution`, then log the mismatch with `logger.warning`, pass `language_mismatch` to `is_cacheable`, and pass both languages to the evaluator (D5). In streaming, take `answer_language` from the supervisor's update and the text from `final_dict`, never from the accumulated text
+- [x] 4.5 Write the API tests from the spec scenarios "Safety net at the endpoints" and "Matching answer at the endpoints", on `/chat/` and `/chat/stream/`: identical events and status for the client, one warning, no cache write on a mismatch, both languages received by the evaluator double, and no check for a tool answer. Run the negative control: remove the `language_mismatch` argument in `chat.py`, check that a test fails, and restore it
+- [x] 4.6 Run the full suite with `uv run pytest`; verify that it passes, and note the test count and time in the commit
 
 ## 5. Language eval runner
 

@@ -30,6 +30,8 @@ class Record:
     memory_reads: list[tuple] = field(default_factory=list)
     saved_facts: list[tuple] = field(default_factory=list)
     evaluations: list[tuple] = field(default_factory=list)
+    # (expected, detected) of each evaluation, in the same order (BUG-11).
+    evaluation_languages: list[tuple] = field(default_factory=list)
     ingestions: list[tuple] = field(default_factory=list)
 
 
@@ -131,6 +133,7 @@ def api(monkeypatch, app_module):
 
     async def evaluate_rag_response(tenant_id, query, answer, context, *args, **kwargs):
         record.evaluations.append((tenant_id, query, answer, context))
+        record.evaluation_languages.append((kwargs.get("expected_language"), kwargs.get("detected_language")))
 
     async def ingest_file(path, tenant_id, *args, **kwargs):
         record.ingestions.append((path, tenant_id, kwargs.get("source")))
